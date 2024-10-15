@@ -17,6 +17,7 @@ def has_CONCH():
             raise ValueError('CONCH_CKPT_PATH not set')
         HAS_CONCH = True
         CONCH_CKPT_PATH = os.environ['CONCH_CKPT_PATH']
+        print(CONCH_CKPT_PATH)
     except Exception as e:
         print(e)
         print('CONCH not installed or CONCH_CKPT_PATH not set')

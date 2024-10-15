@@ -49,25 +49,27 @@ def get_simple_loader(dataset, batch_size=1, num_workers=1):
 	return loader 
 
 def get_split_loader(split_dataset, training = False, testing = False, weighted = False):
-	"""
-		return either the validation loader or training loader 
-	"""
-	kwargs = {'num_workers': 4} if device.type == "cuda" else {}
-	if not testing:
-		if training:
-			if weighted:
-				weights = make_weights_for_balanced_classes_split(split_dataset)
-				loader = DataLoader(split_dataset, batch_size=1, sampler = WeightedRandomSampler(weights, len(weights)), collate_fn = collate_MIL, **kwargs)	
-			else:
-				loader = DataLoader(split_dataset, batch_size=1, sampler = RandomSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
-		else:
-			loader = DataLoader(split_dataset, batch_size=1, sampler = SequentialSampler(split_dataset), collate_fn = collate_MIL, **kwargs)
-	
-	else:
-		ids = np.random.choice(np.arange(len(split_dataset), int(len(split_dataset)*0.1)), replace = False)
-		loader = DataLoader(split_dataset, batch_size=1, sampler = SubsetSequentialSampler(ids), collate_fn = collate_MIL, **kwargs )
+    """
+        return either the validation loader or training loader 
+    """
+    
+    kwargs = {'num_workers': 4} if device.type == "cuda" else {}
+    if not testing:
+        if training:
+            if weighted:
+                weights = make_weights_for_balanced_classes_split(split_dataset)
+                loader = DataLoader(split_dataset, batch_size=1, sampler=WeightedRandomSampler(weights, len(weights)), collate_fn=collate_MIL, **kwargs)
+            else:
+                loader = DataLoader(split_dataset, batch_size=1, sampler=RandomSampler(split_dataset), collate_fn=collate_MIL, **kwargs)
+        else:
+            loader = DataLoader(split_dataset, batch_size=1, sampler=SequentialSampler(split_dataset), collate_fn=collate_MIL, **kwargs)
 
-	return loader
+    else:
+        ids = np.random.choice(np.arange(len(split_dataset)), int(len(split_dataset)*0.1), replace=False)
+        loader = DataLoader(split_dataset, batch_size=1, sampler=SubsetSequentialSampler(ids), collate_fn=collate_MIL, **kwargs)
+
+    return loader
+
 
 def get_optim(model, args):
 	if args.opt == "adam":
@@ -145,14 +147,18 @@ def calculate_error(Y_hat, Y):
 	return error
 
 def make_weights_for_balanced_classes_split(dataset):
-	N = float(len(dataset))                                           
-	weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
-	weight = [0] * int(N)                                           
-	for idx in range(len(dataset)):   
-		y = dataset.getlabel(idx)                        
-		weight[idx] = weight_per_class[y]                                  
+    # N = float(len(dataset))                                           
+    # weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
+    # weight = [0] * int(N)                                           
+    # for idx in range(len(dataset)):   
+    # 	y = dataset.getlabel(idx)                        
+    # 	weight[idx] = weight_per_class[y]                                  
 
-	return torch.DoubleTensor(weight)
+    # return torch.DoubleTensor(weight)
+    N = float(len(dataset))
+    weight_per_class = {c: N/len(dataset.slide_cls_ids[c]) for c in dataset.slide_cls_ids}
+    weight_per_sample = [sum([weight_per_class[c] for c in dataset.slide_cls_ids if sample_id in dataset.slide_cls_ids[c]]) for sample_id in range(int(N))]
+    return weight_per_sample
 
 def initialize_weights(module):
 	for m in module.modules():

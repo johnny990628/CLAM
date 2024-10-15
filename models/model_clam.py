@@ -250,3 +250,99 @@ class CLAM_MB(CLAM_SB):
         if return_features:
             results_dict.update({'features': M})
         return logits, Y_prob, Y_hat, A_raw, results_dict
+
+class CLAM_MB_MultiLabel(CLAM_MB):
+    def __init__(self, gate=True, size_arg="small", dropout=0., k_sample=8, n_classes=4,
+                 instance_loss_fn=nn.BCEWithLogitsLoss(), subtyping=False, embed_dim=1024):
+        super(CLAM_MB_MultiLabel, self).__init__(gate, size_arg, dropout, k_sample, n_classes,
+                                                 instance_loss_fn, subtyping, embed_dim)
+        
+        # 重新定義分類器為二元分類器
+        self.classifiers = nn.ModuleList([nn.Linear(self.size_dict[size_arg][1], 1) for _ in range(n_classes)])
+        self.instance_classifiers = nn.ModuleList([nn.Linear(self.size_dict[size_arg][1], 2) for _ in range(n_classes)])
+
+    def forward(self, h, label=None, instance_eval=False, return_features=False, attention_only=False):
+        A, h = self.attention_net(h)  # NxK        
+        A = torch.transpose(A, 1, 0)  # KxN
+        if attention_only:
+            return A
+        A_raw = A
+        A = F.softmax(A, dim=1)  # softmax over N
+
+        if instance_eval:
+            total_inst_loss = 0.0
+            all_preds = []
+            all_targets = []
+            inst_labels = label  # 假設標籤已經是二元格式
+            for i in range(self.n_classes):
+                classifier = self.instance_classifiers[i]
+                if inst_labels[0, i] == 1:  # 检查第 i 个类别是否为正
+                    instance_loss, preds, targets = self.inst_eval(A[i], h, classifier)
+                else:
+                    if self.subtyping:
+                        instance_loss, preds, targets = self.inst_eval_out(A[i], h, classifier)
+                    else:
+                        continue
+                all_preds.extend(preds.cpu().numpy())
+                all_targets.extend(targets.cpu().numpy())
+                total_inst_loss += instance_loss
+
+            if self.subtyping:
+                total_inst_loss /= len(self.instance_classifiers)
+
+        M = torch.mm(A, h) 
+
+        logits = torch.empty(1, self.n_classes).float().to(h.device)
+        for c in range(self.n_classes):
+            logits[0, c] = self.classifiers[c](M[c]).squeeze()
+        
+        Y_prob = torch.sigmoid(logits)
+        Y_hat = (Y_prob > 0.5).long()
+
+        if instance_eval:
+            results_dict = {'instance_loss': total_inst_loss, 'inst_labels': np.array(all_targets), 
+            'inst_preds': np.array(all_preds)}
+        else:
+            results_dict = {}
+        if return_features:
+            results_dict.update({'features': M})
+
+        return logits, Y_prob, Y_hat, A_raw, results_dict
+
+    def inst_eval(self, A, h, classifier):
+        device = h.device
+        top_p_ids = torch.topk(A, self.k_sample)[1]
+        top_p = torch.index_select(h, dim=0, index=top_p_ids)
+        top_n_ids = torch.topk(-A, self.k_sample, dim=0)[1]
+        top_n = torch.index_select(h, dim=0, index=top_n_ids)
+        p_targets = self.create_positive_targets(self.k_sample, device)
+        n_targets = self.create_negative_targets(self.k_sample, device)
+
+        all_targets = torch.cat([p_targets, n_targets], dim=0)
+        all_instances = torch.cat([top_p, top_n], dim=0)
+        logits = classifier(all_instances).squeeze()  # 确保 logits 是一维的
+
+        # 将目标转换为与 logits 相同的形状
+        all_targets = all_targets.float().unsqueeze(1)
+        all_targets = torch.cat([1-all_targets, all_targets], dim=1)  # 创建 one-hot 编码
+
+        instance_loss = self.instance_loss_fn(logits, all_targets)
+        all_preds = (torch.sigmoid(logits) > 0.5).long()
+        return instance_loss, all_preds, all_targets.argmax(dim=1)  # 返回类别索引而不是 one-hot 编码
+
+
+    def inst_eval_out(self, A, h, classifier):
+        device = h.device
+        top_p_ids = torch.topk(A, self.k_sample)[1]
+        top_p = torch.index_select(h, dim=0, index=top_p_ids)
+        p_targets = self.create_negative_targets(self.k_sample, device)
+        logits = classifier(top_p).squeeze()  # 确保 logits 是一维的
+
+        # 将目标转换为与 logits 相同的形状
+        p_targets = p_targets.float().unsqueeze(1)
+        p_targets = torch.cat([1-p_targets, p_targets], dim=1)  # 创建 one-hot 编码
+
+        instance_loss = self.instance_loss_fn(logits, p_targets)
+        p_preds = (torch.sigmoid(logits) > 0.5).long()
+        return instance_loss, p_preds, p_targets.argmax(dim=1)  # 返回类别索引而不是 one-hot 编码
+

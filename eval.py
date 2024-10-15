@@ -11,7 +11,7 @@ import pandas as pd
 from utils.utils import *
 from math import floor
 import matplotlib.pyplot as plt
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_MIL_MultiLabel_Dataset, save_splits
 import h5py
 from utils.eval_utils import *
 
@@ -30,7 +30,7 @@ parser.add_argument('--splits_dir', type=str, default=None,
                     help='splits directory, if using custom splits other than what matches the task (default: None)')
 parser.add_argument('--model_size', type=str, choices=['small', 'big'], default='small', 
                     help='size of model (default: small)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil', 'clam_mb_multi'], default='clam_sb', 
                     help='type of model (default: clam_sb)')
 parser.add_argument('--k', type=int, default=10, help='number of folds (default: 10)')
 parser.add_argument('--k_start', type=int, default=-1, help='start fold (default: -1, last fold)')
@@ -39,9 +39,9 @@ parser.add_argument('--fold', type=int, default=-1, help='single fold to evaluat
 parser.add_argument('--micro_average', action='store_true', default=False, 
                     help='use micro_average instead of macro_avearge for multiclass AUC')
 parser.add_argument('--split', type=str, choices=['train', 'val', 'test', 'all'], default='test')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation'])
 parser.add_argument('--drop_out', type=float, default=0.25, help='dropout')
-parser.add_argument('--embed_dim', type=int, default=1024)
+parser.add_argument('--embed_dim', type=int, default=512)
 args = parser.parse_args()
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -90,15 +90,28 @@ elif args.task == 'task_2_tumor_subtyping':
                             patient_strat= False,
                             ignore=[])
 
-# elif args.task == 'tcga_kidney_cv':
-#     args.n_classes=3
-#     dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tcga_kidney_clean.csv',
-#                             data_dir= os.path.join(args.data_root_dir, 'tcga_kidney_20x_features'),
-#                             shuffle = False, 
-#                             print_info = True,
-#                             label_dict = {'TCGA-KICH':0, 'TCGA-KIRC':1, 'TCGA-KIRP':2},
-#                             patient_strat= False,
-#                             ignore=['TCGA-SARC'])
+elif args.task == 'task_tp53_mutation':
+    args.n_classes=2
+    dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tp53_mutation.csv',
+                            data_dir= os.path.join(args.data_root_dir),
+                            shuffle = False, 
+                            print_info = True,
+                            label_dict = {'normal':0, 'mutation':1},
+                            patient_strat=False,
+                            ignore=[])
+
+elif args.task == 'task_4genes_mutation':
+    args.n_classes=4
+    label_dict = {'TP53': 0, 'EGFR': 1, 'KRAS': 2, 'STK11': 3}
+    dataset = Generic_MIL_MultiLabel_Dataset(
+                                        csv_path='dataset_csv/4genes_mutation.csv',
+                                        data_dir=os.path.join(args.data_root_dir),
+                                        shuffle = False, 
+                                        print_info = True,
+                                        label_dict=label_dict,
+                                        patient_strat=False,
+                                        label_cols=['TP53', 'EGFR', 'KRAS', 'STK11'])
+
 
 else:
     raise NotImplementedError
