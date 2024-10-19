@@ -36,6 +36,20 @@ def has_UNI():
     except Exception as e:
         print(e)
     return HAS_UNI, UNI_CKPT_PATH
+
+def has_CHIEF():
+    HAS_CHIEF = False
+    CHIEF_CKPT_PATH = ''
+    # check if CHIEF_CKPT_PATH is set, catch exception if not
+    try:
+        # check if UNI_CKPT_PATH is set
+        if 'CHIEF_CKPT_PATH' not in os.environ:
+            raise ValueError('CHIEF_CKPT_PATH not set')
+        HAS_UNI = True
+        CHIEF_CKPT_PATH = os.environ['CHIEF_CKPT_PATH']
+    except Exception as e:
+        print(e)
+    return HAS_CHIEF, CHIEF_CKPT_PATH
         
 def get_encoder(model_name, target_img_size=224):
     print('loading model checkpoint')
@@ -55,6 +69,14 @@ def get_encoder(model_name, target_img_size=224):
         from conch.open_clip_custom import create_model_from_pretrained
         model, _ = create_model_from_pretrained("conch_ViT-B-16", CONCH_CKPT_PATH)
         model.forward = partial(model.encode_image, proj_contrast=False, normalize=False)
+    elif model__name == 'chief':
+        HAS_CHIEF, CHIEF_CKPT_PATH = has_CHIEF()
+        assert HAS_CHIEF, 'CHIEF is not available'
+        from chief.models.ctran import ctranspath
+        model = ctranspath()
+        model.head = nn.Identity()
+        td = torch.load(CHIEF_CKPT_PATH)
+        model.load_state_dict(td['model'], strict=True)
     else:
         raise NotImplementedError('model {} not implemented'.format(model_name))
     

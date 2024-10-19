@@ -108,7 +108,7 @@ parser.add_argument('--subtyping', action='store_true', default=False,
                      help='subtyping problem')
 parser.add_argument('--bag_weight', type=float, default=0.7,
                     help='clam: weight coefficient for bag-level loss (default: 0.7)')
-parser.add_argument('--B', type=int, default=8, help='numbr of positive/negative patches to sample for clam')
+parser.add_argument('--B', type=int, default=4, help='numbr of positive/negative patches to sample for clam')
 parser.add_argument('--multi_label', type=bool, default=False, help='multi label')
 args = parser.parse_args()
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")

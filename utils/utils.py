@@ -147,18 +147,18 @@ def calculate_error(Y_hat, Y):
 	return error
 
 def make_weights_for_balanced_classes_split(dataset):
-    # N = float(len(dataset))                                           
-    # weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
-    # weight = [0] * int(N)                                           
-    # for idx in range(len(dataset)):   
-    # 	y = dataset.getlabel(idx)                        
-    # 	weight[idx] = weight_per_class[y]                                  
+    N = float(len(dataset))                                           
+    weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
+    weight = [0] * int(N)                                           
+    for idx in range(len(dataset)):   
+    	y = dataset.getlabel(idx)                        
+    	weight[idx] = weight_per_class[y]                                  
 
-    # return torch.DoubleTensor(weight)
-    N = float(len(dataset))
-    weight_per_class = {c: N/len(dataset.slide_cls_ids[c]) for c in dataset.slide_cls_ids}
-    weight_per_sample = [sum([weight_per_class[c] for c in dataset.slide_cls_ids if sample_id in dataset.slide_cls_ids[c]]) for sample_id in range(int(N))]
-    return weight_per_sample
+    return torch.DoubleTensor(weight)
+    # N = float(len(dataset))
+    # weight_per_class = {c: N/len(dataset.slide_cls_ids[c]) for c in dataset.slide_cls_ids}
+    # weight_per_sample = [sum([weight_per_class[c] for c in dataset.slide_cls_ids if sample_id in dataset.slide_cls_ids[c]]) for sample_id in range(int(N))]
+    # return weight_per_sample
 
 def initialize_weights(module):
 	for m in module.modules():

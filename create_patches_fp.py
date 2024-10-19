@@ -144,7 +144,11 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 				current_seg_params.update({key: df.loc[idx, key]})
 
 			for key in patch_params.keys():
-				current_patch_params.update({key: df.loc[idx, key]})
+				if key in df.columns:
+					current_patch_params.update({key: df.loc[idx, key]})
+				else:
+					current_patch_params.update({key: patch_params[key]})  # Use default value if not in DataFrame
+
 
 		if current_vis_params['vis_level'] < 0:
 			if len(WSI_object.level_dim) == 1:
@@ -306,7 +310,6 @@ if __name__ == '__main__':
 		patch_params.update({'patch_level': args.patch_level, 'patch_size': args.patch_size, 'step_size': args.step_size, 
 								'save_path': patch_save_dir})
 
-	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 
 	if args.preset:
 		preset_df = pd.read_csv(os.path.join('presets', args.preset))

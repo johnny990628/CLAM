@@ -15,6 +15,52 @@ def calculate_error_multilabel(Y_hat, Y):
     error = 1. - (Y_hat == Y).float().mean().item()
     return error
 
+# class Accuracy_Logger(object):
+#     """Accuracy logger"""
+#     def __init__(self, n_classes):
+#         super().__init__()
+#         self.n_classes = n_classes
+#         self.initialize()
+
+#     def initialize(self):
+#         self.data = [{"count": 0, "correct": 0} for i in range(self.n_classes)]
+    
+#     def log(self, Y_hat, Y):
+#         Y_hat = self.to_numpy(Y_hat)
+#         Y = self.to_numpy(Y)
+#         Y_hat = np.argmax(Y_hat, axis=1)
+#         Y = np.argmax(Y, axis=1)
+#         self.log_batch(Y_hat, Y)
+    
+#     def log_batch(self, Y_hat, Y):
+#         Y_hat = self.to_numpy(Y_hat)
+#         Y = self.to_numpy(Y)
+#         for label_class in range(self.n_classes):
+#             cls_mask = Y == label_class
+#             self.data[label_class]["count"] += cls_mask.sum()
+#             self.data[label_class]["correct"] += (Y_hat[cls_mask] == label_class).sum()
+    
+#     def get_summary(self, c):
+#         count = self.data[c]["count"] 
+#         correct = self.data[c]["correct"]
+        
+#         if count == 0: 
+#             acc = None
+#         else:
+#             acc = float(correct) / count
+        
+#         return acc, correct, count
+
+#     @staticmethod
+#     def to_numpy(tensor):
+#         if isinstance(tensor, np.ndarray):
+#             return tensor
+#         elif isinstance(tensor, torch.Tensor):
+#             return tensor.detach().cpu().numpy()
+#         else:
+#             raise TypeError("Unsupported type. Input must be a NumPy array or PyTorch tensor.")
+
+
 class Accuracy_Logger(object):
     """Accuracy logger"""
     def __init__(self, n_classes):
@@ -26,19 +72,18 @@ class Accuracy_Logger(object):
         self.data = [{"count": 0, "correct": 0} for i in range(self.n_classes)]
     
     def log(self, Y_hat, Y):
-        Y_hat = self.to_numpy(Y_hat)
-        Y = self.to_numpy(Y)
-        Y_hat = np.argmax(Y_hat, axis=1)
-        Y = np.argmax(Y, axis=1)
-        self.log_batch(Y_hat, Y)
+        Y_hat = int(Y_hat)
+        Y = int(Y)
+        self.data[Y]["count"] += 1
+        self.data[Y]["correct"] += (Y_hat == Y)
     
     def log_batch(self, Y_hat, Y):
-        Y_hat = self.to_numpy(Y_hat)
-        Y = self.to_numpy(Y)
-        for label_class in range(self.n_classes):
+        Y_hat = np.array(Y_hat).astype(int)
+        Y = np.array(Y).astype(int)
+        for label_class in np.unique(Y):
             cls_mask = Y == label_class
             self.data[label_class]["count"] += cls_mask.sum()
-            self.data[label_class]["correct"] += (Y_hat[cls_mask] == label_class).sum()
+            self.data[label_class]["correct"] += (Y_hat[cls_mask] == Y[cls_mask]).sum()
     
     def get_summary(self, c):
         count = self.data[c]["count"] 
@@ -51,21 +96,10 @@ class Accuracy_Logger(object):
         
         return acc, correct, count
 
-    @staticmethod
-    def to_numpy(tensor):
-        if isinstance(tensor, np.ndarray):
-            return tensor
-        elif isinstance(tensor, torch.Tensor):
-            return tensor.detach().cpu().numpy()
-        else:
-            raise TypeError("Unsupported type. Input must be a NumPy array or PyTorch tensor.")
-
-
-
 
 class EarlyStopping:
     """Early stops the training if validation loss doesn't improve after a given patience."""
-    def __init__(self, patience=20, stop_epoch=50, verbose=False):
+    def __init__(self, patience=10, stop_epoch=5, verbose=False):
         """
         Args:
             patience (int): How long to wait after last time validation loss improved.
@@ -201,7 +235,7 @@ def train(datasets, cur, args):
 
     print('\nSetup EarlyStopping...', end=' ')
     if args.early_stopping:
-        early_stopping = EarlyStopping(patience = 20, stop_epoch=50, verbose = True)
+        early_stopping = EarlyStopping(patience = 10, stop_epoch=30, verbose = True)
 
     else:
         early_stopping = None
@@ -264,11 +298,11 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         logits, Y_prob, Y_hat, _, instance_dict = model(data, label=label, instance_eval=True)
 
         acc_logger.log(Y_hat, label)
-        loss = loss_fn(logits, label.float())
+        loss = loss_fn(logits, label)
         loss_value = loss.item()
 
         instance_loss = instance_dict['instance_loss']
-        inst_count += 1
+        inst_count+=1
         instance_loss_value = instance_loss.item()
         train_inst_loss += instance_loss_value
         
@@ -276,15 +310,14 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
 
         inst_preds = instance_dict['inst_preds']
         inst_labels = instance_dict['inst_labels']
-        
         inst_logger.log_batch(inst_preds, inst_labels)
 
         train_loss += loss_value
         if (batch_idx + 1) % 20 == 0:
             print('batch {}, loss: {:.4f}, instance_loss: {:.4f}, weighted_loss: {:.4f}, '.format(batch_idx, loss_value, instance_loss_value, total_loss.item()) + 
-                'label: {}, bag_size: {}'.format(label.cpu().numpy(), data.size(0)))
+                'label: {}, bag_size: {}'.format(label.item(), data.size(0)))
 
-        error = calculate_error_multilabel(Y_hat, label)
+        error = calculate_error(Y_hat, label)
         train_error += error
         
         # backward pass
@@ -300,7 +333,7 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
     if inst_count > 0:
         train_inst_loss /= inst_count
         print('\n')
-        for i in range(n_classes):
+        for i in range(2):
             acc, correct, count = inst_logger.get_summary(i)
             print('class {} clustering acc {}: correct {}/{}'.format(i, acc, correct, count))
 
@@ -431,12 +464,12 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
     val_inst_acc = 0.
     inst_count=0
     
-    all_probs = []
-    all_labels = []
+    prob = np.zeros((len(loader), n_classes))
+    labels = np.zeros(len(loader))
     sample_size = model.k_sample
-    with torch.no_grad():
+    with torch.inference_mode():
         for batch_idx, (data, label) in enumerate(loader):
-            data, label = data.to(device), label.to(device).float()
+            data, label = data.to(device), label.to(device)      
             logits, Y_prob, Y_hat, _, instance_dict = model(data, label=label, instance_eval=True)
             acc_logger.log(Y_hat, label)
             
@@ -447,33 +480,31 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
             instance_loss = instance_dict['instance_loss']
             
             inst_count+=1
-            instance_loss_value = instance_loss.item() if isinstance(instance_loss, torch.Tensor) else instance_loss
+            instance_loss_value = instance_loss.item()
             val_inst_loss += instance_loss_value
 
             inst_preds = instance_dict['inst_preds']
             inst_labels = instance_dict['inst_labels']
             inst_logger.log_batch(inst_preds, inst_labels)
 
-            all_probs.extend(Y_prob.cpu().numpy())
-            all_labels.extend(label.cpu().numpy())
+            prob[batch_idx] = Y_prob.cpu().numpy()
+            labels[batch_idx] = label.item()
             
-            error = calculate_error_multilabel(Y_hat, label)
+            error = calculate_error(Y_hat, label)
             val_error += error
 
     val_error /= len(loader)
     val_loss /= len(loader)
 
-    all_probs = np.array(all_probs)
-    all_labels = np.array(all_labels)
-
     if n_classes == 2:
-        auc = roc_auc_score(all_labels[:, 1], all_probs[:, 1])
+        auc = roc_auc_score(labels, prob[:, 1])
         aucs = []
     else:
         aucs = []
+        binary_labels = label_binarize(labels, classes=[i for i in range(n_classes)])
         for class_idx in range(n_classes):
-            if class_idx in all_labels.argmax(axis=1):
-                fpr, tpr, _ = roc_curve(all_labels[:, class_idx], all_probs[:, class_idx])
+            if class_idx in labels:
+                fpr, tpr, _ = roc_curve(binary_labels[:, class_idx], prob[:, class_idx])
                 aucs.append(calc_auc(fpr, tpr))
             else:
                 aucs.append(float('nan'))
@@ -493,6 +524,7 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
         writer.add_scalar('val/error', val_error, epoch)
         writer.add_scalar('val/inst_loss', val_inst_loss, epoch)
 
+
     for i in range(n_classes):
         acc, correct, count = acc_logger.get_summary(i)
         print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
@@ -500,6 +532,7 @@ def validate_clam(cur, epoch, model, loader, n_classes, early_stopping = None, w
         if writer and acc is not None:
             writer.add_scalar('val/class_{}_acc'.format(i), acc, epoch)
      
+
     if early_stopping:
         assert results_dir
         early_stopping(epoch, val_loss, model, ckpt_name = os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))

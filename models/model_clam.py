@@ -104,34 +104,40 @@ class CLAM_SB(nn.Module):
         return torch.full((length, ), 0, device=device).long()
     
     #instance-level evaluation for in-the-class attention branch
-    def inst_eval(self, A, h, classifier): 
-        device=h.device
+    def inst_eval(self, A, h, classifier):
+        device = h.device
         if len(A.shape) == 1:
             A = A.view(1, -1)
-        top_p_ids = torch.topk(A, self.k_sample)[1][-1]
+        n_instances = A.size(1)
+        k = min(self.k_sample, n_instances)  # 確保 k 不大於可用的實例數量
+        
+        top_p_ids = torch.topk(A, k)[1][-1]
         top_p = torch.index_select(h, dim=0, index=top_p_ids)
-        top_n_ids = torch.topk(-A, self.k_sample, dim=1)[1][-1]
+        top_n_ids = torch.topk(-A, k, dim=1)[1][-1]
         top_n = torch.index_select(h, dim=0, index=top_n_ids)
-        p_targets = self.create_positive_targets(self.k_sample, device)
-        n_targets = self.create_negative_targets(self.k_sample, device)
+        p_targets = self.create_positive_targets(k, device)
+        n_targets = self.create_negative_targets(k, device)
 
         all_targets = torch.cat([p_targets, n_targets], dim=0)
         all_instances = torch.cat([top_p, top_n], dim=0)
         logits = classifier(all_instances)
-        all_preds = torch.topk(logits, 1, dim = 1)[1].squeeze(1)
+        all_preds = torch.topk(logits, 1, dim=1)[1].squeeze(1)
         instance_loss = self.instance_loss_fn(logits, all_targets)
         return instance_loss, all_preds, all_targets
-    
+
     #instance-level evaluation for out-of-the-class attention branch
     def inst_eval_out(self, A, h, classifier):
-        device=h.device
+        device = h.device
         if len(A.shape) == 1:
             A = A.view(1, -1)
-        top_p_ids = torch.topk(A, self.k_sample)[1][-1]
+        n_instances = A.size(1)
+        k = min(self.k_sample, n_instances)  # 確保 k 不大於可用的實例數量
+        
+        top_p_ids = torch.topk(A, k)[1][-1]
         top_p = torch.index_select(h, dim=0, index=top_p_ids)
-        p_targets = self.create_negative_targets(self.k_sample, device)
+        p_targets = self.create_negative_targets(k, device)
         logits = classifier(top_p)
-        p_preds = torch.topk(logits, 1, dim = 1)[1].squeeze(1)
+        p_preds = torch.topk(logits, 1, dim=1)[1].squeeze(1)
         instance_loss = self.instance_loss_fn(logits, p_targets)
         return instance_loss, p_preds, p_targets
 
