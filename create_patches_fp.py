@@ -44,6 +44,10 @@ def patching(WSI_object, **kwargs):
 	patch_time_elapsed = time.time() - start_time
 	return file_path, patch_time_elapsed
 
+def create_patches_for_magnification(WSI_object, mag_params, **kwargs):
+    file_path, patch_time_elapsed = patching(WSI_object=WSI_object, **mag_params, **kwargs)
+    return file_path, patch_time_elapsed
+
 
 def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_dir, 
 				  patch_size = 256, step_size = 256, 
@@ -195,10 +199,13 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 
 		patch_time_elapsed = -1 # Default time
 		if patch:
-			current_patch_params.update({'patch_level': patch_level, 'patch_size': patch_size, 'step_size': step_size, 
-										 'save_path': patch_save_dir})
-			file_path, patch_time_elapsed = patching(WSI_object = WSI_object,  **current_patch_params,)
-		
+			if args.magnification == 'tree':
+				file_path_low, patch_time_elapsed_low = create_patches_for_magnification(WSI_object, patch_params_low)
+				file_path_high, patch_time_elapsed_high = create_patches_for_magnification(WSI_object, patch_params_high)
+				patch_time_elapsed = patch_time_elapsed_low + patch_time_elapsed_high
+			else:
+				file_path, patch_time_elapsed = create_patches_for_magnification(WSI_object, patch_params)
+
 		stitch_time_elapsed = -1
 		if stitch:
 			file_path = os.path.join(patch_save_dir, slide_id+'.h5')
@@ -210,7 +217,10 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 		print("segmentation took {} seconds".format(seg_time_elapsed))
 		print("patching took {} seconds".format(patch_time_elapsed))
 		print("stitching took {} seconds".format(stitch_time_elapsed))
-		df.loc[idx, 'status'] = 'processed'
+		if args.magnification == 'tree':
+			df.loc[idx, 'status'] = 'processed_tree'
+		else:
+			df.loc[idx, 'status'] = 'processed'
 
 		seg_times += seg_time_elapsed
 		patch_times += patch_time_elapsed
@@ -247,6 +257,9 @@ parser.add_argument('--patch_level', type=int, default=0,
 parser.add_argument('--process_list',  type = str, default=None,
 					help='name of list of images to process with parameters (.csv)')
 
+parser.add_argument('--magnification', type=str, default='single', choices=['single', 'low', 'high', 'tree'], help='Magnification level(s) to process')
+
+
 if __name__ == '__main__':
 	args = parser.parse_args()
 
@@ -280,6 +293,19 @@ if __name__ == '__main__':
 				  'keep_ids': 'none', 'exclude_ids': 'none'}
 	filter_params = {'a_t':100, 'a_h': 16, 'max_n_holes':8}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
+	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
+
+	if args.magnification == 'tree':
+		patch_params_low = patch_params.copy()
+		patch_params_high = patch_params.copy()
+		patch_params_low.update({'patch_level': args.patch_level, 'patch_size': args.patch_size, 'step_size': args.step_size, 
+									'save_path': patch_save_dir})
+		patch_params_high.update({'patch_level': max(0, args.patch_level - 1), 'patch_size': args.patch_size * 2, 'step_size': args.step_size * 2, 
+									'save_path': patch_save_dir})
+	else:
+		patch_params.update({'patch_level': args.patch_level, 'patch_size': args.patch_size, 'step_size': args.step_size, 
+								'save_path': patch_save_dir})
+
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
 
 	if args.preset:

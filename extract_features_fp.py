@@ -47,6 +47,17 @@ def compute_w_loader(output_path, loader, model, verbose = 0):
 	
 	return output_path
 
+def compute_tree_features(output_path, loader_low, loader_high, model_low, model_high, fusion_method='cat'):
+    features_low = compute_w_loader(output_path + '_low', loader_low, model_low)
+    features_high = compute_w_loader(output_path + '_high', loader_high, model_high)
+    
+    if fusion_method == 'fusion':
+        features = features_high + 0.25 * features_low
+    else:  # 'cat'
+        features = np.concatenate((features_high, features_low), axis=-1)
+    
+    return features
+
 
 parser = argparse.ArgumentParser(description='Feature Extraction')
 parser.add_argument('--data_h5_dir', type=str, default=None)
@@ -58,6 +69,9 @@ parser.add_argument('--model_name', type=str, default='resnet50_trunc', choices=
 parser.add_argument('--batch_size', type=int, default=256)
 parser.add_argument('--no_auto_skip', default=False, action='store_true')
 parser.add_argument('--target_patch_size', type=int, default=224)
+parser.add_argument('--magnification', type=str, default='single', choices=['single', 'low', 'high', 'tree'], help='Magnification level(s) to process')
+parser.add_argument('--tree_fusion', type=str, default='cat', choices=['cat', 'fusion'], help='Fusion method for tree magnification')
+
 args = parser.parse_args()
 
 
@@ -75,7 +89,7 @@ if __name__ == '__main__':
 	dest_files = os.listdir(os.path.join(args.feat_dir, 'pt_files'))
 
 	model, img_transforms = get_encoder(args.model_name, target_img_size=args.target_patch_size)
-			
+
 	_ = model.eval()
 	model = model.to(device)
 	total = len(bags_dataset)
@@ -97,12 +111,18 @@ if __name__ == '__main__':
 		output_path = os.path.join(args.feat_dir, 'h5_files', bag_name)
 		time_start = time.time()
 		wsi = openslide.open_slide(slide_file_path)
-		dataset = Whole_Slide_Bag_FP(file_path=h5_file_path, 
-							   		 wsi=wsi, 
-									 img_transforms=img_transforms)
-
-		loader = DataLoader(dataset=dataset, batch_size=args.batch_size, **loader_kwargs)
-		output_file_path = compute_w_loader(output_path, loader = loader, model = model, verbose = 1)
+		if args.magnification == 'tree':
+			dataset_low = Whole_Slide_Bag_FP(file_path=h5_file_path, wsi=wsi, img_transforms=img_transforms, custom_downsample=1)
+			dataset_high = Whole_Slide_Bag_FP(file_path=h5_file_path, wsi=wsi, img_transforms=img_transforms, custom_downsample=0.5)
+			
+			loader_low = DataLoader(dataset=dataset_low, batch_size=args.batch_size, **loader_kwargs)
+			loader_high = DataLoader(dataset=dataset_high, batch_size=args.batch_size, **loader_kwargs)
+			
+			output_file_path = compute_tree_features(output_path, loader_low, loader_high, model, fusion_method=args.tree_fusion)
+		else:
+			dataset = Whole_Slide_Bag_FP(file_path=h5_file_path, wsi=wsi, img_transforms=img_transforms)
+			loader = DataLoader(dataset=dataset, batch_size=args.batch_size, **loader_kwargs)
+			output_file_path = compute_w_loader(output_path, loader=loader, model=model, verbose=1)
 
 		time_elapsed = time.time() - time_start
 		print('\ncomputing features for {} took {} s'.format(output_file_path, time_elapsed))

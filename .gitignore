@@ -6,7 +6,8 @@ results
 eval_results
 checkpoints
 conch
-FEATURES_DIRECTORY
-RESULTS_DIRECTORY
+FEATURES*/
+PATCHES*/
+*.out
 splits
 dataset_csv
