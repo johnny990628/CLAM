@@ -3,7 +3,7 @@ import h5py
 import pandas as pd
 
 # 指定包含 .h5 檔案的資料夾路徑
-folder_path = '/work/u6658716/TCGA-LUAD/CLAM/PATCHES_10x_448/patches'
+folder_path = '/work/u6658716/TCGA-LUAD/CLAM/PATCHES/LUAD/40x_448/patches'
 
 # 創建一個列表來存儲結果
 results = []
@@ -45,7 +45,7 @@ for filename in os.listdir(folder_path):
 df = pd.DataFrame(results)
 
 # 將結果保存為 CSV 檔案
-output_path = '/work/u6658716/TCGA-LUAD/CLAM/10x_h5_analysis_results.csv'
+output_path = '/work/u6658716/TCGA-LUAD/CLAM/40x_h5_analysis_results.csv'
 df.to_csv(output_path, index=False)
 
 print(f"Results saved to: {output_path}")

@@ -1,0 +1,25 @@
+nohup: ignoring input
+label column: label
+label dictionary: {'normal': 0, 'mutation': 1}
+number of classes: 2
+slide-level counts:  
+ label
+1    147
+0    171
+Name: count, dtype: int64
+Patient-LVL; Number of samples registered in class 0: 138
+Slide-LVL; Number of samples registered in class 0: 171
+Patient-LVL; Number of samples registered in class 1: 142
+Slide-LVL; Number of samples registered in class 1: 147
+
+number of training samples: 222
+number of samples in cls 0: 120
+number of samples in cls 1: 102
+
+number of val samples: 96
+number of samples in cls 0: 51
+number of samples in cls 1: 45
+
+number of test samples: 0
+Splits saved to splits/task_tp53_mutation_100/splits_0.csv
+Splits saved to splits/task_tp53_mutation_100/splits_0_bool.csv
