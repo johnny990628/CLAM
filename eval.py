@@ -11,6 +11,8 @@ import pandas as pd
 from utils.utils import *
 from math import floor
 import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_MIL_MultiLabel_Dataset, save_splits
 import h5py
 from utils.eval_utils import *
@@ -19,7 +21,7 @@ from utils.eval_utils import *
 parser = argparse.ArgumentParser(description='CLAM Evaluation Script')
 parser.add_argument('--data_root_dir', type=str, default=None,
                     help='data directory')
-parser.add_argument('--results_dir', type=str, default='./results',
+parser.add_argument('--results_dir', type=str, default='./RESULTS',
                     help='relative path to results folder, i.e. '+
                     'the directory containing models_exp_code relative to project root (default: ./results)')
 parser.add_argument('--save_exp_code', type=str, default=None,
@@ -46,7 +48,7 @@ args = parser.parse_args()
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-args.save_dir = os.path.join('./eval_results', 'EVAL_' + str(args.save_exp_code))
+args.save_dir = os.path.join('./EVAL_RESULTS', 'EVAL_' + str(args.save_exp_code))
 args.models_dir = os.path.join(args.results_dir, str(args.models_exp_code))
 
 os.makedirs(args.save_dir, exist_ok=True)
@@ -132,6 +134,29 @@ else:
 ckpt_paths = [os.path.join(args.models_dir, 's_{}_checkpoint.pt'.format(fold)) for fold in folds]
 datasets_id = {'train': 0, 'val': 1, 'test': 2, 'all': -1}
 
+def gen_cm_matrics(df, auc, save_dir):
+    y_true = df['Y']
+    y_pred = df['Y_hat']
+    cm = confusion_matrix(y_true, y_pred)
+    tn, fp, fn, tp = cm.ravel()
+    
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
+    f1_score = 2 * (precision * sensitivity) / (precision + sensitivity) if (precision + sensitivity) > 0 else 0
+    
+    print(f"Sensitivity: {sensitivity}, Specificity: {specificity}, F1 Score: {f1_score}")
+    with open(os.path.join(save_dir, 'metrics.txt'), 'a') as f:
+        f.write(f"AUC:{auc:.4f}, Sensitivity:{sensitivity:.4f}, Specificity:{specificity:.4f}, F1 Score:{f1_score:.4f}\n")
+
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
+    plt.xlabel('Predicted')
+    plt.ylabel('Actual')
+    plt.title(f'Confusion Matrix')
+    plt.savefig(os.path.join(save_dir, f'cm.png'))
+    plt.close()
+
 if __name__ == "__main__":
     all_results = []
     all_auc = []
@@ -148,6 +173,7 @@ if __name__ == "__main__":
         all_auc.append(auc)
         all_acc.append(1-test_error)
         df.to_csv(os.path.join(args.save_dir, 'fold_{}.csv'.format(folds[ckpt_idx])), index=False)
+        gen_cm_matrics(df, auc, args.save_dir)
 
     final_df = pd.DataFrame({'folds': folds, 'test_auc': all_auc, 'test_acc': all_acc})
     if len(folds) != args.k:

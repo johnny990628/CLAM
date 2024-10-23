@@ -4,13 +4,13 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.model_mil import MIL_fc, MIL_fc_mc
-from models.model_clam import CLAM_SB, CLAM_MB, CLAM_MB_MultiLabel
+from models.model_clam import CLAM_SB, CLAM_MB
 import pdb
 import os
 import pandas as pd
 from utils.utils import *
 from utils.core_utils import Accuracy_Logger
-from sklearn.metrics import roc_auc_score, roc_curve, auc as sklearn_auc
+from sklearn.metrics import roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 import matplotlib.pyplot as plt
 
@@ -25,8 +25,6 @@ def initiate_model(args, ckpt_path, device='cuda'):
         model = CLAM_SB(**model_dict)
     elif args.model_type =='clam_mb':
         model = CLAM_MB(**model_dict)
-    elif args.model_type =='clam_mb_multi':
-        model = CLAM_MB_MultiLabel(**model_dict)
     else: # args.model_type == 'mil'
         if args.n_classes > 2:
             model = MIL_fc_mc(**model_dict)
@@ -63,14 +61,14 @@ def summary(model, loader, args):
     test_loss = 0.
     test_error = 0.
 
-    all_probs = []
-    all_labels = []
+    all_probs = np.zeros((len(loader), args.n_classes))
+    all_labels = np.zeros(len(loader))
+    all_preds = np.zeros(len(loader))
 
     slide_ids = loader.dataset.slide_data['slide_id']
     patient_results = {}
     for batch_idx, (data, label) in enumerate(loader):
         data, label = data.to(device), label.to(device)
-        label = label.float()  # 確保標籤是浮點型
         slide_id = slide_ids.iloc[batch_idx]
         with torch.no_grad():
             logits, Y_prob, Y_hat, _, results_dict = model(data)
@@ -78,42 +76,43 @@ def summary(model, loader, args):
         acc_logger.log(Y_hat, label)
         
         probs = Y_prob.cpu().numpy()
-        all_probs.append(probs)
-        all_labels.append(label.cpu().numpy())
+
+        all_probs[batch_idx] = probs
+        all_labels[batch_idx] = label.item()
+        all_preds[batch_idx] = Y_hat.item()
         
-        patient_results.update({slide_id: {'slide_id': np.array(slide_id), 'prob': probs, 'label': label.cpu().numpy()}})
+        patient_results.update({slide_id: {'slide_id': np.array(slide_id), 'prob': probs, 'label': label.item()}})
         
-        error = calculate_error_multilabel(Y_hat, label)
+        error = calculate_error(Y_hat, label)
         test_error += error
 
     del data
     test_error /= len(loader)
 
-    all_probs = np.concatenate(all_probs, axis=0)
-    all_labels = np.concatenate(all_labels, axis=0)
+    aucs = []
+    if len(np.unique(all_labels)) == 1:
+        auc_score = -1
 
-    if args.n_classes == 2:
-        auc_score = roc_auc_score(all_labels[:, 1], all_probs[:, 1])
-        aucs = [auc_score]
-    else:
-        aucs = []
-        for class_idx in range(args.n_classes):
-            if class_idx in all_labels.argmax(axis=1):
-                fpr, tpr, _ = roc_curve(all_labels[:, class_idx], all_probs[:, class_idx])
-                aucs.append(sklearn_auc(fpr, tpr))
+    else: 
+        if args.n_classes == 2:
+            auc_score = roc_auc_score(all_labels, all_probs[:, 1])
+        else:
+            binary_labels = label_binarize(all_labels, classes=[i for i in range(args.n_classes)])
+            for class_idx in range(args.n_classes):
+                if class_idx in all_labels:
+                    fpr, tpr, _ = roc_curve(binary_labels[:, class_idx], all_probs[:, class_idx])
+                    aucs.append(auc(fpr, tpr))
+                else:
+                    aucs.append(float('nan'))
+            if args.micro_average:
+                binary_labels = label_binarize(all_labels, classes=[i for i in range(args.n_classes)])
+                fpr, tpr, _ = roc_curve(binary_labels.ravel(), all_probs.ravel())
+                auc_score = auc(fpr, tpr)
             else:
-                aucs.append(float('nan'))
+                auc_score = np.nanmean(np.array(aucs))
 
-        auc_score = np.nanmean(np.array(aucs))
-
-    results_dict = {'slide_id': slide_ids}
+    results_dict = {'slide_id': slide_ids, 'Y': all_labels, 'Y_hat': all_preds}
     for c in range(args.n_classes):
-        results_dict.update({'Y_{}'.format(c): all_labels[:, c], 'p_{}'.format(c): all_probs[:, c]})
+        results_dict.update({'p_{}'.format(c): all_probs[:,c]})
     df = pd.DataFrame(results_dict)
     return patient_results, test_error, auc_score, df, acc_logger
-
-
-
-def calculate_error_multilabel(Y_hat, Y):
-    error = 1. - (Y_hat == Y).float().mean().item()
-    return error

@@ -14,31 +14,26 @@ import h5py
 from utils.utils import generate_split, nth
 
 def save_splits(split_datasets, column_keys, filename, boolean_style=False):
-    # 過濾掉None值的數據集
-    valid_splits = [split for split in split_datasets if split is not None]
-    valid_keys = [key for key, split in zip(column_keys, split_datasets) if split is not None]
-
-    splits = [split.slide_data['slide_id'] for split in valid_splits]
+    splits = [split_datasets[i].slide_data['slide_id'] for i in range(len(split_datasets))]
     
     if not boolean_style:
         df = pd.concat(splits, ignore_index=True, axis=1)
-        df.columns = valid_keys
+        df.columns = column_keys
     else:
         df = pd.concat(splits, ignore_index=True, axis=0)
         index = df.values.tolist()
-        one_hot = np.eye(len(valid_splits)).astype(bool)
-        bool_array = np.repeat(one_hot, [len(dset) for dset in valid_splits], axis=0)
-        df = pd.DataFrame(bool_array, index=index, columns=valid_keys)
+        one_hot = np.eye(len(split_datasets)).astype(bool)
+        bool_array = np.repeat(one_hot, [len(dset) for dset in split_datasets], axis=0)
+        df = pd.DataFrame(bool_array, index=index, columns=column_keys)
 
     # 添加多標籤信息
-    if isinstance(valid_splits[0], Generic_Split_MultiLabel):
-        label_columns = [col for col in valid_splits[0].slide_data.columns if col in valid_splits[0].label_dict]
+    if isinstance(split_datasets[0], Generic_Split_MultiLabel):
+        label_columns = [col for col in split_datasets[0].slide_data.columns if col in split_datasets[0].label_dict]
         for col in label_columns:
-            df[col] = pd.concat([split.slide_data[col] for split in valid_splits], ignore_index=True)
+            df[col] = pd.concat([split_datasets[i].slide_data[col] for i in range(len(split_datasets))], ignore_index=True)
 
     df.to_csv(filename, index=False)
     print(f"Splits saved to {filename}")
-
 
 
 class Generic_WSI_Classification_Dataset(Dataset):

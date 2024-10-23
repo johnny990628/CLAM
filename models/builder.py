@@ -3,6 +3,8 @@ from functools import partial
 import timm
 from .timm_wrapper import TimmCNNEncoder
 import torch
+import torch.nn as nn
+from torchvision import transforms
 from utils.constants import MODEL2CONSTANTS
 from utils.transform_utils import get_eval_transforms
 
@@ -45,7 +47,7 @@ def has_CHIEF():
         # check if UNI_CKPT_PATH is set
         if 'CHIEF_CKPT_PATH' not in os.environ:
             raise ValueError('CHIEF_CKPT_PATH not set')
-        HAS_UNI = True
+        HAS_CHIEF = True
         CHIEF_CKPT_PATH = os.environ['CHIEF_CKPT_PATH']
     except Exception as e:
         print(e)
@@ -69,7 +71,7 @@ def get_encoder(model_name, target_img_size=224):
         from conch.open_clip_custom import create_model_from_pretrained
         model, _ = create_model_from_pretrained("conch_ViT-B-16", CONCH_CKPT_PATH)
         model.forward = partial(model.encode_image, proj_contrast=False, normalize=False)
-    elif model__name == 'chief':
+    elif model_name == 'chief':
         HAS_CHIEF, CHIEF_CKPT_PATH = has_CHIEF()
         assert HAS_CHIEF, 'CHIEF is not available'
         from chief.models.ctran import ctranspath
@@ -83,7 +85,7 @@ def get_encoder(model_name, target_img_size=224):
     print(model)
     constants = MODEL2CONSTANTS[model_name]
     img_transforms = get_eval_transforms(mean=constants['mean'],
-                                         std=constants['std'],
-                                         target_img_size = target_img_size)
-
+                                        std=constants['std'],
+                                        target_img_size = target_img_size)
+   
     return model, img_transforms
