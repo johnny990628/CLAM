@@ -48,7 +48,7 @@ args = parser.parse_args()
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-args.save_dir = os.path.join('./EVAL_RESULTS', 'EVAL_' + str(args.save_exp_code))
+args.save_dir = os.path.join(args.save_exp_code)
 args.models_dir = os.path.join(args.results_dir, str(args.models_exp_code))
 
 os.makedirs(args.save_dir, exist_ok=True)
@@ -67,7 +67,7 @@ settings = {'task': args.task,
             'drop_out': args.drop_out,
             'model_size': args.model_size}
 
-with open(args.save_dir + '/eval_experiment_{}.txt'.format(args.save_exp_code), 'w') as f:
+with open(args.save_dir + '/eval_experiment_{}.txt'.format(args.models_exp_code), 'w') as f:
     print(settings, file=f)
 f.close()
 

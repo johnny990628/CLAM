@@ -79,6 +79,11 @@ def get_encoder(model_name, target_img_size=224):
         model.head = nn.Identity()
         td = torch.load(CHIEF_CKPT_PATH)
         model.load_state_dict(td['model'], strict=True)
+    elif model_name == 'gigapath':
+        assert "HF_TOKEN" in os.environ, "Please set the HF_TOKEN environment variable to your Hugging Face API token"
+        model = timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)
+
+
     else:
         raise NotImplementedError('model {} not implemented'.format(model_name))
     
