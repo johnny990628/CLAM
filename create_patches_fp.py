@@ -2,6 +2,7 @@
 from wsi_core.WholeSlideImage import WholeSlideImage
 from wsi_core.wsi_utils import StitchCoords
 from wsi_core.batch_process_utils import initialize_df
+
 # other imports
 import os
 import numpy as np
@@ -10,8 +11,42 @@ import argparse
 import pdb
 import pandas as pd
 from tqdm import tqdm
+import openslide
 
-def stitching(file_path, wsi_object, downscale = 64):
+
+def get_nearest_magnification(mag):
+	common_magnifications = [1, 5, 10, 20, 40]
+	# 找到與 mag 最接近的倍率
+	nearest_mag = min(common_magnifications, key=lambda x: abs(x - mag))
+	return nearest_mag
+
+def calculate_scale_factor(wsi, target_magnification, use_highest_level=False):
+	objective_power = float(wsi.wsi.properties.get('openslide.objective-power'))
+	target_magnification = float(target_magnification)
+	target_downsample = objective_power / target_magnification
+
+	available_magnifications = []
+	available_downsamples = wsi.wsi.level_downsamples
+	best_level = 0
+	custom_downsample = 1
+	for i, downsample in enumerate(available_downsamples):
+		mag = float(get_nearest_magnification(objective_power / downsample))
+		available_magnifications.append(mag)
+		if mag >= target_magnification:
+			best_level = i
+		print(f"Level {i}: Magnification = {mag:.2f}x, Downsample = {downsample:.2f}")
+
+	scale_factor = float(target_magnification) / float(available_magnifications[best_level])
+	print(f"Target Magnification: {target_magnification}")
+	print(f"Best Level: {best_level}")
+	print(f"Custom Downsample: {custom_downsample}")
+	print(f"Scale Factor: {scale_factor}")
+	
+	return scale_factor, best_level
+
+
+
+def stitching(file_path, wsi_object, downscale):
 	start = time.time()
 	heatmap = StitchCoords(file_path, wsi_object, downscale=downscale, bg_color=(0,0,0), alpha=-1, draw_grid=False)
 	total_time = time.time() - start
@@ -45,22 +80,23 @@ def patching(WSI_object, **kwargs):
 	return file_path, patch_time_elapsed
 
 def create_patches_for_magnification(WSI_object, mag_params, **kwargs):
-    file_path, patch_time_elapsed = patching(WSI_object=WSI_object, **mag_params, **kwargs)
-    return file_path, patch_time_elapsed
+	file_path, patch_time_elapsed = patching(WSI_object=WSI_object, **mag_params, **kwargs)
+	return file_path, patch_time_elapsed
 
 
 def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_dir, 
-				  patch_size = 256, step_size = 256, 
-				  seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
-				  'keep_ids': 'none', 'exclude_ids': 'none'},
-				  filter_params = {'a_t':100, 'a_h': 16, 'max_n_holes':8}, 
-				  vis_params = {'vis_level': -1, 'line_thickness': 500},
-				  patch_params = {'use_padding': True, 'contour_fn': 'four_pt'},
-				  patch_level = 0,
-				  use_default_params = False, 
-				  seg = False, save_mask = True, 
-				  stitch= False, 
-				  patch = False, auto_skip=True, process_list = None):
+				patch_size = 256, step_size = 256, 
+				seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': False,
+				'keep_ids': 'none', 'exclude_ids': 'none'},
+				filter_params = {'a_t':100, 'a_h': 16, 'max_n_holes':8}, 
+				vis_params = {'vis_level': -1, 'line_thickness': 500},
+				patch_params = {'use_padding': True, 'contour_fn': 'four_pt'},
+				patch_level=0,
+				magnification=40.0,
+				use_default_params = False, 
+				seg = False, save_mask = True, 
+				stitch= False, 
+				patch = False, auto_skip=True, process_list = None):
 	
 
 
@@ -109,6 +145,13 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 		# Inialize WSI
 		full_path = os.path.join(source, slide)
 		WSI_object = WholeSlideImage(full_path)
+		
+		# patch_level, custom_downsample = get_patch_level(WSI_object, magnification)
+		# if patch_level is None:
+		# 	print('Error occur when parsed {}, skipped'.format(slide_id))
+		# 	continue
+
+		scale_factor, patch_level = calculate_scale_factor(WSI_object,magnification)
 
 		if use_default_params:
 			current_vis_params = vis_params.copy()
@@ -121,7 +164,6 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 			current_filter_params = {}
 			current_seg_params = {}
 			current_patch_params = {}
-
 
 			for key in vis_params.keys():
 				if legacy_support and key == 'vis_level':
@@ -203,13 +245,15 @@ def seg_and_patch(source, save_dir, patch_save_dir, mask_save_dir, stitch_save_d
 
 		patch_time_elapsed = -1 # Default time
 		if patch:
-			if args.magnification == 'tree':
-				file_path_low, patch_time_elapsed_low = create_patches_for_magnification(WSI_object, patch_params_low)
-				file_path_high, patch_time_elapsed_high = create_patches_for_magnification(WSI_object, patch_params_high)
-				patch_time_elapsed = patch_time_elapsed_low + patch_time_elapsed_high
-			else:
-				file_path, patch_time_elapsed = create_patches_for_magnification(WSI_object, patch_params)
-
+			current_patch_params.update({
+				'patch_level': patch_level,
+				'patch_size': patch_size,
+				'step_size': step_size,
+				'save_path': patch_save_dir,
+				'scale_factor': scale_factor,  # 传递自定义降采样
+				})
+			file_path, patch_time_elapsed = patching(WSI_object = WSI_object,  **current_patch_params)
+		
 		stitch_time_elapsed = -1
 		if stitch:
 			file_path = os.path.join(patch_save_dir, slide_id+'.h5')
@@ -256,12 +300,10 @@ parser.add_argument('--save_dir', type = str,
 					help='directory to save processed data')
 parser.add_argument('--preset', default=None, type=str,
 					help='predefined profile of default segmentation and filter parameters (.csv)')
-parser.add_argument('--patch_level', type=int, default=0, 
-					help='downsample level at which to patch')
 parser.add_argument('--process_list',  type = str, default=None,
 					help='name of list of images to process with parameters (.csv)')
-
-parser.add_argument('--magnification', type=str, default='single', choices=['single', 'low', 'high', 'tree'], help='Magnification level(s) to process')
+parser.add_argument('--magnification', type=str, default='20',
+						help='Target magnification for patching')
 
 
 if __name__ == '__main__':
@@ -283,10 +325,10 @@ if __name__ == '__main__':
 	print('stitch_save_dir: ', stitch_save_dir)
 	
 	directories = {'source': args.source, 
-				   'save_dir': args.save_dir,
-				   'patch_save_dir': patch_save_dir, 
-				   'mask_save_dir' : mask_save_dir, 
-				   'stitch_save_dir': stitch_save_dir} 
+				'save_dir': args.save_dir,
+				'patch_save_dir': patch_save_dir, 
+				'mask_save_dir' : mask_save_dir, 
+				'stitch_save_dir': stitch_save_dir} 
 
 	for key, val in directories.items():
 		print("{} : {}".format(key, val))
@@ -294,21 +336,10 @@ if __name__ == '__main__':
 			os.makedirs(val, exist_ok=True)
 
 	seg_params = {'seg_level': -1, 'sthresh': 8, 'mthresh': 7, 'close': 4, 'use_otsu': True,
-				  'keep_ids': 'none', 'exclude_ids': 'none'}
+				'keep_ids': 'none', 'exclude_ids': 'none'}
 	filter_params = {'a_t':100, 'a_h': 16, 'max_n_holes':8}
 	vis_params = {'vis_level': -1, 'line_thickness': 250}
 	patch_params = {'use_padding': True, 'contour_fn': 'four_pt'}
-
-	if args.magnification == 'tree':
-		patch_params_low = patch_params.copy()
-		patch_params_high = patch_params.copy()
-		patch_params_low.update({'patch_level': args.patch_level, 'patch_size': args.patch_size, 'step_size': args.step_size, 
-									'save_path': patch_save_dir})
-		patch_params_high.update({'patch_level': max(0, args.patch_level - 1), 'patch_size': args.patch_size * 2, 'step_size': args.step_size * 2, 
-									'save_path': patch_save_dir})
-	else:
-		patch_params.update({'patch_level': args.patch_level, 'patch_size': args.patch_size, 'step_size': args.step_size, 
-								'save_path': patch_save_dir})
 
 
 	if args.preset:
@@ -326,15 +357,15 @@ if __name__ == '__main__':
 			patch_params[key] = preset_df.loc[0, key]
 	
 	parameters = {'seg_params': seg_params,
-				  'filter_params': filter_params,
-	 			  'patch_params': patch_params,
-				  'vis_params': vis_params}
+				'filter_params': filter_params,
+				'patch_params': patch_params,
+				'vis_params': vis_params}
 
 	print(parameters)
 
 	seg_times, patch_times = seg_and_patch(**directories, **parameters,
 											patch_size = args.patch_size, step_size=args.step_size, 
 											seg = args.seg,  use_default_params=False, save_mask = True, 
-											stitch= args.stitch,
-											patch_level=args.patch_level, patch = args.patch,
+											stitch= args.stitch,magnification= args.magnification,
+											patch = args.patch,
 											process_list = process_list, auto_skip=args.no_auto_skip)

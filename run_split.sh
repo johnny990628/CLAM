@@ -1,6 +1,6 @@
-TASK=task_tp53_mutation
+TASK=task_tp53_mutation_529
 TEST_RATIO=0.2
-VAL_RATIO=0.2
+VAL_RATIO=0.1
 FOLD=1
 
 TIMESHIMP=$(date +"%Y%m%d%H%M")

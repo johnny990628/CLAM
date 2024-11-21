@@ -1,7 +1,7 @@
 import pdb
 import os
 import pandas as pd
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_WSI_MultiLabel_Dataset, save_splits
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits
 import argparse
 import numpy as np
 
@@ -12,7 +12,7 @@ parser.add_argument('--seed', type=int, default=1,
                     help='random seed (default: 1)')
 parser.add_argument('--k', type=int, default=10,
                     help='number of splits (default: 10)')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal', 'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal', 'task_2_tumor_subtyping', 'task_tp53_mutation_318', 'task_tp53_mutation_529'])
 parser.add_argument('--val_frac', type=float, default= 0.1,
                     help='fraction of labels for validation (default: 0.1)')
 parser.add_argument('--test_frac', type=float, default= 0.1,
@@ -41,9 +41,10 @@ elif args.task == 'task_2_tumor_subtyping':
                             patient_voting='maj',
                             ignore=[])
 
-elif args.task == 'task_tp53_mutation':
+elif args.task == 'task_tp53_mutation_318' or args.task == 'task_tp53_mutation_529':
     args.n_classes=2
-    dataset = Generic_WSI_Classification_Dataset(csv_path = 'dataset_csv/tp53_mutation.csv',
+    csv_file = args.task[5:]
+    dataset = Generic_WSI_Classification_Dataset(csv_path = f'dataset_csv/{csv_file}.csv',
                             shuffle = False, 
                             seed = args.seed, 
                             print_info = True,

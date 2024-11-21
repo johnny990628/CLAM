@@ -1,7 +1,7 @@
 from __future__ import print_function
 
 import numpy as np
-
+from datetime import datetime
 import argparse
 import torch
 import torch.nn as nn
@@ -11,9 +11,9 @@ import pandas as pd
 from utils.utils import *
 from math import floor
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, roc_curve
 import seaborn as sns
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_MIL_MultiLabel_Dataset, save_splits
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits
 import h5py
 from utils.eval_utils import *
 
@@ -44,6 +44,7 @@ parser.add_argument('--split', type=str, choices=['train', 'val', 'test', 'all']
 parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation'])
 parser.add_argument('--drop_out', type=float, default=0.25, help='dropout')
 parser.add_argument('--embed_dim', type=int, default=512)
+parser.add_argument('--multi_scale', action='store_true', default=False)
 args = parser.parse_args()
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -55,6 +56,9 @@ os.makedirs(args.save_dir, exist_ok=True)
 
 if args.splits_dir is None:
     args.splits_dir = args.models_dir
+
+if args.multi_scale:
+    args.embed_dim = int(args.embed_dim)*2
 
 assert os.path.isdir(args.models_dir)
 assert os.path.isdir(args.splits_dir)
@@ -94,7 +98,7 @@ elif args.task == 'task_2_tumor_subtyping':
 
 elif args.task == 'task_tp53_mutation':
     args.n_classes=2
-    dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tp53_mutation.csv',
+    dataset = Generic_MIL_Dataset(csv_path = 'dataset_csv/tp53_mutation_529.csv',
                             data_dir= os.path.join(args.data_root_dir),
                             shuffle = False, 
                             print_info = True,
@@ -134,9 +138,22 @@ else:
 ckpt_paths = [os.path.join(args.models_dir, 's_{}_checkpoint.pt'.format(fold)) for fold in folds]
 datasets_id = {'train': 0, 'val': 1, 'test': 2, 'all': -1}
 
+def find_optimal_threshold(y_true, y_pred):
+    fpr, tpr, thresholds = roc_curve(y_true, y_pred)
+    youden_index = tpr - fpr
+    optimal_threshold = thresholds[np.argmax(youden_index)]
+    return optimal_threshold
+
 def gen_cm_matrics(df, auc, save_dir):
     y_true = df['Y']
-    y_pred = df['Y_hat']
+    y_pred_prob = df['Y_hat']
+    # 根據ground truth選擇正確的概率列
+    # y_prob = np.where(y_true == 1, df['p_1'], df['p_0'])
+    y_prob = df['p_1']
+    threshold = find_optimal_threshold(y_true, y_prob)
+    y_pred = (y_prob >= threshold).astype(int)
+    
+    
     cm = confusion_matrix(y_true, y_pred)
     tn, fp, fn, tp = cm.ravel()
     
@@ -145,10 +162,9 @@ def gen_cm_matrics(df, auc, save_dir):
     specificity = tn / (tn + fp) if (tn + fp) > 0 else 0
     f1_score = 2 * (precision * sensitivity) / (precision + sensitivity) if (precision + sensitivity) > 0 else 0
     
+    print(f"Optimal Threshold: {threshold:.4f}")
     print(f"Sensitivity: {sensitivity}, Specificity: {specificity}, F1 Score: {f1_score}")
-    with open(os.path.join(save_dir, 'metrics.txt'), 'a') as f:
-        f.write(f"AUC:{auc:.4f}, Sensitivity:{sensitivity:.4f}, Specificity:{specificity:.4f}, F1 Score:{f1_score:.4f}\n")
-
+    current_time = datetime.now().strftime("%Y%m%d%H%M")
     plt.figure(figsize=(8, 6))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', cbar=False)
     plt.xlabel('Predicted')
@@ -156,6 +172,7 @@ def gen_cm_matrics(df, auc, save_dir):
     plt.title(f'Confusion Matrix')
     plt.savefig(os.path.join(save_dir, f'cm.png'))
     plt.close()
+    return auc, sensitivity, specificity, f1_score, threshold
 
 if __name__ == "__main__":
     all_results = []
@@ -173,7 +190,10 @@ if __name__ == "__main__":
         all_auc.append(auc)
         all_acc.append(1-test_error)
         df.to_csv(os.path.join(args.save_dir, 'fold_{}.csv'.format(folds[ckpt_idx])), index=False)
-        gen_cm_matrics(df, auc, args.save_dir)
+        auc, sensitivity, specificity, f1_score, threshold = gen_cm_matrics(df, auc, args.save_dir)
+        metrics_df = pd.DataFrame({'AUC': auc, 'Sensitivity': sensitivity, 'Specificity': specificity, 
+        'F1 Score': f1_score, 'Youden Threshold': threshold}, index=[0])
+        metrics_df.to_csv(os.path.join(args.save_dir,'metrics.csv'))
 
     final_df = pd.DataFrame({'folds': folds, 'test_auc': all_auc, 'test_acc': all_acc})
     if len(folds) != args.k:

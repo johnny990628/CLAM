@@ -43,7 +43,7 @@ class WholeSlideImage(object):
     def initXML(self, xml_path):
         def _createContour(coord_list):
             return np.array([[[int(float(coord.attributes['X'].value)), 
-                               int(float(coord.attributes['Y'].value))]] for coord in coord_list], dtype = 'int32')
+                            int(float(coord.attributes['Y'].value))]] for coord in coord_list], dtype = 'int32')
 
         xmldoc = minidom.parse(xml_path)
         annotations = [anno.getElementsByTagName('Coordinate') for anno in xmldoc.getElementsByTagName('Annotation')]
@@ -146,7 +146,7 @@ class WholeSlideImage(object):
         img_hsv = cv2.cvtColor(img, cv2.COLOR_RGB2HSV)  # Convert to HSV space
         img_med = cv2.medianBlur(img_hsv[:,:,1], mthresh)  # Apply median blurring
         
-       
+    
         # Thresholding
         if use_otsu:
             _, img_otsu = cv2.threshold(img_med, 0, sthresh_up, cv2.THRESH_OTSU+cv2.THRESH_BINARY)
@@ -205,7 +205,7 @@ class WholeSlideImage(object):
             if self.contours_tissue is not None and seg_display:
                 if not number_contours:
                     cv2.drawContours(img, self.scaleContourDim(self.contours_tissue, scale), 
-                                     -1, color, line_thickness, lineType=cv2.LINE_8, offset=offset)
+                                    -1, color, line_thickness, lineType=cv2.LINE_8, offset=offset)
 
                 else: # add numbering to each contour
                     for idx, cont in enumerate(self.contours_tissue):
@@ -220,11 +220,11 @@ class WholeSlideImage(object):
 
                 for holes in self.holes_tissue:
                     cv2.drawContours(img, self.scaleContourDim(holes, scale), 
-                                     -1, hole_color, line_thickness, lineType=cv2.LINE_8)
+                                    -1, hole_color, line_thickness, lineType=cv2.LINE_8)
             
             if self.contours_tumor is not None and annot_display:
                 cv2.drawContours(img, self.scaleContourDim(self.contours_tumor, scale), 
-                                 -1, annot_color, line_thickness, lineType=cv2.LINE_8, offset=offset)
+                                -1, annot_color, line_thickness, lineType=cv2.LINE_8, offset=offset)
         
         img = Image.fromarray(img)
     
@@ -235,7 +235,7 @@ class WholeSlideImage(object):
         if max_size is not None and (w > max_size or h > max_size):
             resizeFactor = max_size/w if w > h else max_size/h
             img = img.resize((int(w*resizeFactor), int(h*resizeFactor)))
-       
+    
         return img
 
 
@@ -392,11 +392,15 @@ class WholeSlideImage(object):
 
 
     def process_contour(self, cont, contour_holes, patch_level, save_path, patch_size = 256, step_size = 256,
-        contour_fn='four_pt', use_padding=True, top_left=None, bot_right=None):
-        start_x, start_y, w, h = cv2.boundingRect(cont) if cont is not None else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
+        contour_fn='four_pt', use_padding=True, top_left=None, bot_right=None, scale_factor=1.0):
 
+        start_x, start_y, w, h = cv2.boundingRect(cont) if cont is not None else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
         patch_downsample = (int(self.level_downsamples[patch_level][0]), int(self.level_downsamples[patch_level][1]))
-        ref_patch_size = (patch_size*patch_downsample[0], patch_size*patch_downsample[1])
+        print(f"Patch_downsample: {patch_downsample}")
+        ref_patch_size = (
+            int(patch_size*patch_downsample[0]*scale_factor), 
+            int(patch_size*patch_downsample[1]*scale_factor)
+        )
         
         img_w, img_h = self.level_dim[0]
         if use_padding:
@@ -440,8 +444,8 @@ class WholeSlideImage(object):
             cont_check_fn = contour_fn
 
         
-        step_size_x = step_size * patch_downsample[0]
-        step_size_y = step_size * patch_downsample[1]
+        step_size_x = int(step_size * patch_downsample[0]*scale_factor)
+        step_size_y = int(step_size * patch_downsample[1]*scale_factor)
 
         x_range = np.arange(start_x, stop_x, step=step_size_x)
         y_range = np.arange(start_y, stop_y, step=step_size_y)
@@ -453,7 +457,7 @@ class WholeSlideImage(object):
             num_workers = 4
         pool = mp.Pool(num_workers)
 
-        iterable = [(coord, contour_holes, ref_patch_size[0], cont_check_fn) for coord in coord_candidates]
+        iterable = [(coord, contour_holes, ref_patch_size[0], cont_check_fn, scale_factor) for coord in coord_candidates]
         results = pool.starmap(WholeSlideImage.process_coord_candidate, iterable)
         pool.close()
         results = np.array([result for result in results if result is not None])
@@ -465,12 +469,14 @@ class WholeSlideImage(object):
             
             attr = {'patch_size' :            patch_size, # To be considered...
                     'patch_level' :           patch_level,
+                    'scale_factor' :          scale_factor,
                     'downsample':             self.level_downsamples[patch_level],
                     'downsampled_level_dim' : tuple(np.array(self.level_dim[patch_level])),
                     'level_dim':              self.level_dim[patch_level],
                     'name':                   self.name,
                     'save_path':              save_path}
 
+            print(attr)
             attr_dict = { 'coords' : attr}
             return asset_dict, attr_dict
 
@@ -478,23 +484,23 @@ class WholeSlideImage(object):
             return {}, {}
 
     @staticmethod
-    def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
+    def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn, scale_factor=1.0):
         if WholeSlideImage.isInContours(cont_check_fn, coord, contour_holes, ref_patch_size):
             return coord
         else:
             return None
 
     def visHeatmap(self, scores, coords, vis_level=-1, 
-                   top_left=None, bot_right=None,
-                   patch_size=(256, 256), 
-                   blank_canvas=False, canvas_color=(220, 20, 50), alpha=0.4, 
-                   blur=False, overlap=0.0, 
-                   segment=True, use_holes=True,
-                   convert_to_percentiles=False, 
-                   binarize=False, thresh=0.5,
-                   max_size=None,
-                   custom_downsample = 1,
-                   cmap='coolwarm'):
+                top_left=None, bot_right=None,
+                patch_size=(256, 256), 
+                blank_canvas=False, canvas_color=(220, 20, 50), alpha=0.4, 
+                blur=False, overlap=0.0, 
+                segment=True, use_holes=True,
+                convert_to_percentiles=False, 
+                binarize=False, thresh=0.5,
+                max_size=None,
+                custom_downsample = 1,
+                cmap='coolwarm'):
 
         """
         Args:
@@ -671,7 +677,7 @@ class WholeSlideImage(object):
         if max_size is not None and (w > max_size or h > max_size):
             resizeFactor = max_size/w if w > h else max_size/h
             img = img.resize((int(w*resizeFactor), int(h*resizeFactor)))
-       
+    
         return img
 
     
@@ -735,7 +741,6 @@ class WholeSlideImage(object):
         tissue_mask = tissue_mask.astype(bool)
         print('detected {}/{} of region as tissue'.format(tissue_mask.sum(), tissue_mask.size))
         return tissue_mask
-
 
 
 

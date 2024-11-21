@@ -186,8 +186,8 @@ def DrawMap(canvas, patch_dset, coords, patch_size, indices=None, verbose=1, dra
 
     return Image.fromarray(canvas)
 
-def DrawMapFromCoords(canvas, wsi_object, coords, patch_size, vis_level, indices=None, draw_grid=True):
-    downsamples = wsi_object.wsi.level_downsamples[vis_level]
+def DrawMapFromCoords(canvas, wsi_object, coords, patch_size, patch_level, indices=None, draw_grid=True, custom_downsample=1):
+    downsamples = np.array(wsi_object.wsi.level_downsamples[patch_level]) * custom_downsample
     if indices is None:
         indices = np.arange(len(coords))
     total = len(indices)
@@ -198,7 +198,7 @@ def DrawMapFromCoords(canvas, wsi_object, coords, patch_size, vis_level, indices
     for idx in tqdm(range(total)):        
         patch_id = indices[idx]
         coord = coords[patch_id]
-        patch = np.array(wsi_object.wsi.read_region(tuple(coord), vis_level, patch_size).convert("RGB"))
+        patch = np.array(wsi_object.wsi.read_region(tuple(coord), patch_level, patch_size).convert("RGB"))
         coord = np.ceil(coord / downsamples).astype(np.int32)
         canvas_crop_shape = canvas[coord[1]:coord[1]+patch_size[1], coord[0]:coord[0]+patch_size[0], :3].shape[:2]
         canvas[coord[1]:coord[1]+patch_size[1], coord[0]:coord[0]+patch_size[0], :3] = patch[:canvas_crop_shape[0], :canvas_crop_shape[1], :]
@@ -245,8 +245,8 @@ def StitchCoords(hdf5_file_path, wsi_object, downscale=16, draw_grid=False, bg_c
     print('original size: {} x {}'.format(w, h))
     
     vis_level = wsi.get_best_level_for_downsample(downscale)
-    w, h = wsi.level_dimensions[vis_level]
-    print('downscaled size for stiching: {} x {}'.format(w, h))
+    vis_w, vis_h = wsi.level_dimensions[vis_level]
+    print('Downscaled size for stitching: {} x {}'.format(vis_w, vis_h))
 
     with h5py.File(hdf5_file_path, 'r') as file:
         dset = file['coords']
@@ -254,21 +254,32 @@ def StitchCoords(hdf5_file_path, wsi_object, downscale=16, draw_grid=False, bg_c
         print('start stitching {}'.format(dset.attrs['name']))
         patch_size = dset.attrs['patch_size']
         patch_level = dset.attrs['patch_level']
+        scale_factor = dset.attrs.get('scale_factor',1.0)
     
     print(f'number of patches: {len(coords)}')
-    print(f'patch size: {patch_size} x {patch_size} patch level: {patch_level}')
-    patch_size = tuple((np.array((patch_size, patch_size)) * wsi.level_downsamples[patch_level]).astype(np.int32))
-    print(f'ref patch size: {patch_size} x {patch_size}')
+    print(f'original patch size: {patch_size} x {patch_size}, patch level: {patch_level}')
+    print(f'scale factor: {scale_factor}')
 
-    if w*h > Image.MAX_IMAGE_PIXELS: 
-        raise Image.DecompressionBombError("Visualization Downscale %d is too large" % downscale)
-    
+     # Adjust patch size based on patch level and scale factor
+    patch_size = tuple((np.array((patch_size, patch_size)) * wsi.level_downsamples[patch_level] * scale_factor).astype(np.int32))
+    print(f'Scaled patch size: {patch_size} x {patch_size}')
+    # Adjust coordinates based on scale factor
+    # coords = (coords * scale_factor).astype(np.int32)
+
+    # Check for decompression bomb error
+    if vis_w * vis_h > Image.MAX_IMAGE_PIXELS:
+        raise Image.DecompressionBombError(f"Visualization downscale {downscale} is too large.")
+
+    # Initialize the canvas (heatmap)
     if alpha < 0 or alpha == -1:
-        heatmap = Image.new(size=(w,h), mode="RGB", color=bg_color)
+        heatmap = Image.new(size=(vis_w, vis_h), mode="RGB", color=bg_color)
     else:
-        heatmap = Image.new(size=(w,h), mode="RGBA", color=bg_color + (int(255 * alpha),))
-    
+        heatmap = Image.new(size=(vis_w, vis_h), mode="RGBA", color=bg_color + (int(255 * alpha),))
+
+    # Convert heatmap to numpy array for manipulation
     heatmap = np.array(heatmap)
+
+    # Draw patches on the heatmap
     heatmap = DrawMapFromCoords(heatmap, wsi_object, coords, patch_size, vis_level, indices=None, draw_grid=draw_grid)
     return heatmap
 

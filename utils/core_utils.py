@@ -4,62 +4,13 @@ from utils.utils import *
 import os
 from dataset_modules.dataset_generic import save_splits
 from models.model_mil import MIL_fc, MIL_fc_mc
-from models.model_clam import CLAM_MB, CLAM_SB, CLAM_MB_MultiLabel
+from models.model_clam import CLAM_MB, CLAM_SB
 from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.metrics import auc as calc_auc
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def calculate_error_multilabel(Y_hat, Y):
-    error = 1. - (Y_hat == Y).float().mean().item()
-    return error
-
-# class Accuracy_Logger(object):
-#     """Accuracy logger"""
-#     def __init__(self, n_classes):
-#         super().__init__()
-#         self.n_classes = n_classes
-#         self.initialize()
-
-#     def initialize(self):
-#         self.data = [{"count": 0, "correct": 0} for i in range(self.n_classes)]
-    
-#     def log(self, Y_hat, Y):
-#         Y_hat = self.to_numpy(Y_hat)
-#         Y = self.to_numpy(Y)
-#         Y_hat = np.argmax(Y_hat, axis=1)
-#         Y = np.argmax(Y, axis=1)
-#         self.log_batch(Y_hat, Y)
-    
-#     def log_batch(self, Y_hat, Y):
-#         Y_hat = self.to_numpy(Y_hat)
-#         Y = self.to_numpy(Y)
-#         for label_class in range(self.n_classes):
-#             cls_mask = Y == label_class
-#             self.data[label_class]["count"] += cls_mask.sum()
-#             self.data[label_class]["correct"] += (Y_hat[cls_mask] == label_class).sum()
-    
-#     def get_summary(self, c):
-#         count = self.data[c]["count"] 
-#         correct = self.data[c]["correct"]
-        
-#         if count == 0: 
-#             acc = None
-#         else:
-#             acc = float(correct) / count
-        
-#         return acc, correct, count
-
-#     @staticmethod
-#     def to_numpy(tensor):
-#         if isinstance(tensor, np.ndarray):
-#             return tensor
-#         elif isinstance(tensor, torch.Tensor):
-#             return tensor.detach().cpu().numpy()
-#         else:
-#             raise TypeError("Unsupported type. Input must be a NumPy array or PyTorch tensor.")
-
 
 class Accuracy_Logger(object):
     """Accuracy logger"""
@@ -140,6 +91,8 @@ class EarlyStopping:
         torch.save(model.state_dict(), ckpt_name)
         self.val_loss_min = val_loss
 
+
+
 def train(datasets, cur, args):
     """   
         train for a single fold
@@ -179,22 +132,21 @@ def train(datasets, cur, args):
     
     print('\nInit Model...', end=' ')
     model_dict = {"dropout": args.drop_out, 
-                  'n_classes': args.n_classes, 
-                  "embed_dim": args.embed_dim}
+                  'n_classes': args.n_classes,
+                  "embed_dim": args.embed_dim*2 if args.multi_scale else args.embed_dim,
+                  }
     
     if args.model_size is not None and args.model_type != 'mil':
         model_dict.update({"size_arg": args.model_size})
     
-    if args.model_type in ['clam_sb', 'clam_mb','clam_mb_multi']:
+    if args.model_type in ['clam_sb', 'clam_mb']:
         if args.subtyping:
             model_dict.update({'subtyping': True})
         
         if args.B > 0:
             model_dict.update({'k_sample': args.B})
         
-        if args.model_type == 'clam_mb_multi':
-            instance_loss_fn = nn.BCEWithLogitsLoss()
-        elif args.inst_loss == 'svm':
+        if args.inst_loss == 'svm':
             from topk.svm import SmoothTop1SVM
             instance_loss_fn = SmoothTop1SVM(n_classes = 2)
         else:
@@ -208,8 +160,6 @@ def train(datasets, cur, args):
             model = CLAM_SB(**model_dict, instance_loss_fn=instance_loss_fn)
         elif args.model_type == 'clam_mb':
             model = CLAM_MB(**model_dict, instance_loss_fn=instance_loss_fn)
-        elif args.model_type == 'clam_mb_multi':
-            model = CLAM_MB_MultiLabel(**model_dict, instance_loss_fn=instance_loss_fn)
         else:
             raise NotImplementedError
     
@@ -241,12 +191,23 @@ def train(datasets, cur, args):
         early_stopping = None
     print('Done!')
 
+    print('\nSetup Learning Rate Scheduler', end=' ')
+    if args.lr_scheduler:
+        max_epochs = 50
+        warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=args.warmup_epochs)
+        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs - args.warmup_epochs)
+        scheduler = SequentialLR(optimizer, 
+                                schedulers=[warmup_scheduler, cosine_scheduler],
+                                milestones=[args.warmup_epochs])
+    else:
+        scheduler = None
+    print('Done!')
+
     for epoch in range(args.max_epochs):
-        if args.model_type in ['clam_sb', 'clam_mb','clam_mb_multi'] and not args.no_inst_cluster:     
+        if args.model_type in ['clam_sb', 'clam_mb'] and not args.no_inst_cluster:     
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
             stop = validate_clam(cur, epoch, model, val_loader, args.n_classes, 
                 early_stopping, writer, loss_fn, args.results_dir)
-        
         else:
             train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
             stop = validate(cur, epoch, model, val_loader, args.n_classes, 
@@ -254,6 +215,10 @@ def train(datasets, cur, args):
         
         if stop: 
             break
+        if scheduler:
+            scheduler.step()
+            writer.add_scalar('learning_rate', scheduler.get_last_lr()[0], epoch)
+            print(f"Learning Rate: {scheduler.get_last_lr()[0]:.10f}")
 
     if args.early_stopping:
         model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
@@ -348,7 +313,6 @@ def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writ
         writer.add_scalar('train/loss', train_loss, epoch)
         writer.add_scalar('train/error', train_error, epoch)
         writer.add_scalar('train/clustering_loss', train_inst_loss, epoch)
-
 
 def train_loop(epoch, model, loader, optimizer, n_classes, writer = None, loss_fn = None):   
     model.train()
