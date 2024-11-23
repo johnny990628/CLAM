@@ -397,10 +397,17 @@ class WholeSlideImage(object):
         start_x, start_y, w, h = cv2.boundingRect(cont) if cont is not None else (0, 0, self.level_dim[patch_level][0], self.level_dim[patch_level][1])
         patch_downsample = (int(self.level_downsamples[patch_level][0]), int(self.level_downsamples[patch_level][1]))
         print(f"Patch_downsample: {patch_downsample}")
-        ref_patch_size = (
-            int(patch_size*patch_downsample[0]*scale_factor), 
-            int(patch_size*patch_downsample[1]*scale_factor)
-        )
+        if scale_factor < 1:
+            ref_patch_size = (
+                int(patch_size*patch_downsample[0]/scale_factor), 
+                int(patch_size*patch_downsample[1]/scale_factor)
+            )
+        else:
+            ref_patch_size = (
+                int(patch_size*patch_downsample[0]*scale_factor), 
+                int(patch_size*patch_downsample[1]*scale_factor)
+            )
+       
         
         img_w, img_h = self.level_dim[0]
         if use_padding:
@@ -443,9 +450,13 @@ class WholeSlideImage(object):
             assert isinstance(contour_fn, Contour_Checking_fn)
             cont_check_fn = contour_fn
 
+        if scale_factor < 1:
+            step_size_x = int(step_size * patch_downsample[0]/scale_factor)
+            step_size_y = int(step_size * patch_downsample[1]/scale_factor)
+        else:
+            step_size_x = int(step_size * patch_downsample[0]*scale_factor)
+            step_size_y = int(step_size * patch_downsample[1]*scale_factor)
         
-        step_size_x = int(step_size * patch_downsample[0]*scale_factor)
-        step_size_y = int(step_size * patch_downsample[1]*scale_factor)
 
         x_range = np.arange(start_x, stop_x, step=step_size_x)
         y_range = np.arange(start_y, stop_y, step=step_size_y)
@@ -457,7 +468,7 @@ class WholeSlideImage(object):
             num_workers = 4
         pool = mp.Pool(num_workers)
 
-        iterable = [(coord, contour_holes, ref_patch_size[0], cont_check_fn, scale_factor) for coord in coord_candidates]
+        iterable = [(coord, contour_holes, ref_patch_size[0], cont_check_fn) for coord in coord_candidates]
         results = pool.starmap(WholeSlideImage.process_coord_candidate, iterable)
         pool.close()
         results = np.array([result for result in results if result is not None])
@@ -484,7 +495,7 @@ class WholeSlideImage(object):
             return {}, {}
 
     @staticmethod
-    def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn, scale_factor=1.0):
+    def process_coord_candidate(coord, contour_holes, ref_patch_size, cont_check_fn):
         if WholeSlideImage.isInContours(cont_check_fn, coord, contour_holes, ref_patch_size):
             return coord
         else:

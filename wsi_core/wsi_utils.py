@@ -260,11 +260,12 @@ def StitchCoords(hdf5_file_path, wsi_object, downscale=16, draw_grid=False, bg_c
     print(f'original patch size: {patch_size} x {patch_size}, patch level: {patch_level}')
     print(f'scale factor: {scale_factor}')
 
-     # Adjust patch size based on patch level and scale factor
-    patch_size = tuple((np.array((patch_size, patch_size)) * wsi.level_downsamples[patch_level] * scale_factor).astype(np.int32))
+    # Adjust patch size based on patch level and scale factor
+    if scale_factor < 1:
+        patch_size = tuple((np.array((patch_size, patch_size)) * wsi.level_downsamples[patch_level] / scale_factor).astype(np.int32))
+    else:
+        patch_size = tuple((np.array((patch_size, patch_size)) * wsi.level_downsamples[patch_level] * scale_factor).astype(np.int32))
     print(f'Scaled patch size: {patch_size} x {patch_size}')
-    # Adjust coordinates based on scale factor
-    # coords = (coords * scale_factor).astype(np.int32)
 
     # Check for decompression bomb error
     if vis_w * vis_h > Image.MAX_IMAGE_PIXELS:

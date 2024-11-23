@@ -15,7 +15,7 @@ import openslide
 
 
 def get_nearest_magnification(mag):
-	common_magnifications = [1, 5, 10, 20, 40]
+	common_magnifications = [0.5, 1, 1.25, 2.5, 5, 10, 20, 40]
 	# 找到與 mag 最接近的倍率
 	nearest_mag = min(common_magnifications, key=lambda x: abs(x - mag))
 	return nearest_mag
