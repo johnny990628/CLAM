@@ -1,7 +1,7 @@
 import pdb
 import os
 import pandas as pd
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_WSI_Survival_Dataset, save_splits
 import argparse
 import numpy as np
 
@@ -12,7 +12,7 @@ parser.add_argument('--seed', type=int, default=1,
                     help='random seed (default: 1)')
 parser.add_argument('--k', type=int, default=10,
                     help='number of splits (default: 10)')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal', 'task_2_tumor_subtyping', 'task_tp53_mutation_318', 'task_tp53_mutation_529'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal', 'task_2_tumor_subtyping', 'task_tp53_mutation_318', 'task_tp53_mutation_529', 'task_survival'])
 parser.add_argument('--val_frac', type=float, default= 0.1,
                     help='fraction of labels for validation (default: 0.1)')
 parser.add_argument('--test_frac', type=float, default= 0.1,
@@ -51,17 +51,14 @@ elif args.task == 'task_tp53_mutation_318' or args.task == 'task_tp53_mutation_5
                             label_dict = {'normal':0, 'mutation':1},
                             patient_strat=True,
                             ignore=[])
-elif args.task == 'task_4genes_mutation':
-    args.n_classes = 4
-    label_dict = {'TP53': 0, 'EGFR': 1, 'KRAS': 2, 'STK11': 3}
-    dataset = Generic_WSI_MultiLabel_Dataset(
-        csv_path='dataset_csv/4genes_mutation.csv',
-        shuffle=False, 
-        seed=args.seed, 
-        print_info=True,
-        label_dict=label_dict,
-        patient_strat=True,
-        label_cols=['TP53', 'EGFR', 'KRAS', 'STK11'])
+elif args.task == 'task_survival':
+    dataset = Generic_WSI_Survival_Dataset(csv_path='dataset_csv/survival_335.csv',
+                            shuffle=False,
+                            seed=args.seed,
+                            print_info=True,
+                            time_col='time',
+                            event_col='event',
+                            patient_strat=True)
 
 else:
     raise NotImplementedError

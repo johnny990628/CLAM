@@ -23,12 +23,10 @@ def get_nearest_magnification(mag):
 def calculate_scale_factor(wsi, target_magnification, use_highest_level=False):
 	objective_power = float(wsi.wsi.properties.get('openslide.objective-power'))
 	target_magnification = float(target_magnification)
-	target_downsample = objective_power / target_magnification
 
 	available_magnifications = []
 	available_downsamples = wsi.wsi.level_downsamples
 	best_level = 0
-	custom_downsample = 1
 	for i, downsample in enumerate(available_downsamples):
 		mag = float(get_nearest_magnification(objective_power / downsample))
 		available_magnifications.append(mag)
@@ -39,7 +37,6 @@ def calculate_scale_factor(wsi, target_magnification, use_highest_level=False):
 	scale_factor = float(target_magnification) / float(available_magnifications[best_level])
 	print(f"Target Magnification: {target_magnification}")
 	print(f"Best Level: {best_level}")
-	print(f"Custom Downsample: {custom_downsample}")
 	print(f"Scale Factor: {scale_factor}")
 	
 	return scale_factor, best_level

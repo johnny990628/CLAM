@@ -9,7 +9,7 @@ import math
 from utils.file_utils import save_pkl, load_pkl
 from utils.utils import *
 from utils.core_utils import train
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, Generic_MIL_Survival_Dataset
 
 # pytorch imports
 import torch
@@ -34,10 +34,16 @@ def main(args):
     else:
         end = args.k_end
 
-    all_test_auc = []
-    all_val_auc = []
-    all_test_acc = []
-    all_val_acc = []
+
+    if args.task == 'task_survival':
+        all_test_cindex = []
+        all_val_cindex = []
+    else:
+        all_test_auc = []
+        all_val_auc = []
+        all_test_acc = []
+        all_val_acc = []
+
     folds = np.arange(start, end)
     for i in folds:
         seed_torch(args.seed)
@@ -45,24 +51,36 @@ def main(args):
                 csv_path='{}/splits_{}.csv'.format(args.split_dir, i))
         
         datasets = (train_dataset, val_dataset, test_dataset)
-        results, test_auc, val_auc, test_acc, val_acc  = train(datasets, i, args)
-        all_test_auc.append(test_auc)
-        all_val_auc.append(val_auc)
-        all_test_acc.append(test_acc)
-        all_val_acc.append(val_acc)
+
+        if args.task == 'task_survival':
+            results, test_cindex, val_cindex, _, _ = train(datasets, i, args)
+            all_test_cindex.append(test_cindex)
+            all_val_cindex.append(val_cindex)
+        else:
+            results, test_auc, val_auc, test_acc, val_acc  = train(datasets, i, args)
+            all_test_auc.append(test_auc)
+            all_val_auc.append(val_auc)
+            all_test_acc.append(test_acc)
+            all_val_acc.append(val_acc)
 
         #write results to pkl
         filename = os.path.join(args.results_dir, 'split_{}_results.pkl'.format(i))
         save_pkl(filename, results)
-
-    final_df = pd.DataFrame({'folds': folds, 'test_auc': all_test_auc, 
-        'val_auc': all_val_auc, 'test_acc': all_test_acc, 'val_acc' : all_val_acc})
+    
+    if args.task == 'task_survival':
+        final_df = pd.DataFrame({'folds': folds, 
+                                'test_cindex': all_test_cindex, 
+                                'val_cindex': all_val_cindex})
+    else:
+        final_df = pd.DataFrame({'folds': folds, 'test_auc': all_test_auc, 
+            'val_auc': all_val_auc, 'test_acc': all_test_acc, 'val_acc' : all_val_acc})
 
     if len(folds) != args.k:
         save_name = 'summary_partial_{}_{}.csv'.format(start, end)
     else:
         save_name = 'summary.csv'
     final_df.to_csv(os.path.join(args.results_dir, save_name))
+    return final_df
 
 # Generic training settings
 parser = argparse.ArgumentParser(description='Configurations for WSI Training')
@@ -93,12 +111,12 @@ parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='adam'
 parser.add_argument('--drop_out', type=float, default=0.25, help='dropout')
 parser.add_argument('--bag_loss', type=str, choices=['svm', 'ce'], default='ce',
                      help='slide-level classification loss function (default: ce)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'clam_survival', 'mil'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
 parser.add_argument('--exp_code', type=str, help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=False, help='enable weighted sampling')
 parser.add_argument('--model_size', type=str, choices=['small', 'big'], default='small', help='size of model, does not affect mil')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation', 'task_survival'])
 ### CLAM specific options
 parser.add_argument('--no_inst_cluster', action='store_true', default=False,
                      help='disable instance-level clustering')
@@ -112,6 +130,8 @@ parser.add_argument('--B', type=int, default=4, help='numbr of positive/negative
 parser.add_argument('--multi_scale', action='store_true', default=False, help='use multi-scale features')
 parser.add_argument('--warmup_epochs', type=int, default=0)
 parser.add_argument('--lr_scheduler', action='store_true', default=False)
+parser.add_argument('--batch_size', type=int, default=16)
+
 
 args = parser.parse_args()
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -191,6 +211,17 @@ elif args.task == 'task_tp53_mutation':
                         label_dict = {'normal':0, 'mutation':1},
                         patient_strat=False,
                         ignore=[])
+    
+elif args.task == 'task_survival':
+    args.n_classes = 1  # 生存分析輸出為一個連續值
+    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_335.csv',
+                        data_dir= os.path.join(args.data_root_dir),
+                        shuffle = False, 
+                        seed = args.seed, 
+                        print_info = True,
+                        time_col = 'time',
+                        event_col = 'event',
+                        patient_strat=True)
         
 else:
     raise NotImplementedError
@@ -223,6 +254,15 @@ for key, val in settings.items():
 
 if __name__ == "__main__":
     results = main(args)
+    if args.task == 'task_survival':
+        print('\nFinal mean test C-index: {:.4f}'.format(results['test_cindex'].mean()))
+        print('Final mean validation C-index: {:.4f}'.format(results['val_cindex'].mean()))
+    else:
+        print('\nFinal mean test AUC: {:.4f}'.format(results['test_auc'].mean()))
+        print('Final mean validation AUC: {:.4f}'.format(results['val_auc'].mean()))
+        print('Final mean test accuracy: {:.4f}'.format(results['test_acc'].mean()))
+        print('Final mean validation accuracy: {:.4f}'.format(results['val_acc'].mean()))
+    
     print("finished!")
     print("end script")
 
