@@ -21,8 +21,7 @@ from models import get_encoder
 
 
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-if os.environ['CUDA_VISIBLE_DEVICES']:
-	device = torch.cuda.set_device(int(os.environ['CUDA_VISIBLE_DEVICES']))
+
 
 def compute_w_loader(output_path, loader, model, verbose = 0):
 	"""
