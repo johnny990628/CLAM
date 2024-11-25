@@ -252,10 +252,10 @@ class CLAM_MB(CLAM_SB):
         return logits, Y_prob, Y_hat, A_raw, results_dict
     
 
-class Survival(nn.Module):
-    def __init__(self, gate=True, size_arg="large", dropout=True,**kwargs):
-        super(Survival, self).__init__()
-        self.size_dict = {'xs': [384, 256, 256], "small": [768, 512, 256], "big": [1024, 512, 384], 'large': [2048, 1024, 512]}
+class CLAM_Survival(nn.Module):
+    def __init__(self, gate=True, size_arg="large", dropout=True, embed_dim=512, **kwargs):
+        super(CLAM_Survival, self).__init__()
+        self.size_dict = {'xs': [embed_dim, 256, 256], "small": [embed_dim, 512, 256], "big": [embed_dim, 512, 384], 'large': [embed_dim, 1024, 512]}
         size = self.size_dict[size_arg]
         fc = [nn.Linear(size[0], size[1]), nn.ReLU()]
         if dropout:
@@ -276,9 +276,10 @@ class Survival(nn.Module):
     def create_negative_targets(length, device):
         return torch.full((length,), 0, device=device).long()
 
-    def forward(self, h,epoch=0,label=None, instance_eval=False, return_features=False, attention_only=False):
+    def forward(self, h, epoch=0, label=None, instance_eval=False, return_features=False, attention_only=False):
         device = h.device
         #h=h.squeeze(0)
+        
         A, h = self.attention_net(h)  # NxK
         A = torch.transpose(A, 1, 0)  # KxN
         if attention_only:
@@ -295,4 +296,4 @@ class Survival(nn.Module):
             'attention_raw': A_raw,
             'M': M
         }
-        return result
+        return risk_score

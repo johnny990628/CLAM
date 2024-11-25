@@ -2,13 +2,16 @@ import numpy as np
 import torch
 from utils.utils import *
 import os
-from dataset_modules.dataset_generic import save_splits
+from dataset_modules.dataset_generic import save_splits, save_splits_survival
+from utils.loss_utils import NLLLoss
 from models.model_mil import MIL_fc, MIL_fc_mc
-from models.model_clam import CLAM_MB, CLAM_SB
+from models.model_clam import CLAM_MB, CLAM_SB, CLAM_Survival
 from sklearn.preprocessing import label_binarize
 from sklearn.metrics import roc_auc_score, roc_curve
 from sklearn.metrics import auc as calc_auc
 from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from lifelines.utils import concordance_index
+from sksurv.metrics import concordance_index_censored
 
 device=torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -111,15 +114,19 @@ def train(datasets, cur, args):
 
     print('\nInit train/val/test splits...', end=' ')
     train_split, val_split, test_split = datasets
-    save_splits(datasets, ['train', 'val', 'test'], os.path.join(args.results_dir, 'splits_{}.csv'.format(cur)))
+    
+    if args.task == 'task_survival':
+        save_splits_survival(datasets, ['train', 'val', 'test'], os.path.join(args.results_dir, 'splits_{}.csv'.format(cur)))
+    else:
+        save_splits(datasets, ['train', 'val', 'test'], os.path.join(args.results_dir, 'splits_{}.csv'.format(cur)))
     print('Done!')
     print("Training on {} samples".format(len(train_split)))
     print("Validating on {} samples".format(len(val_split)))
     print("Testing on {} samples".format(len(test_split)))
 
     print('\nInit loss function...', end=' ')
-    if args.model_type == 'clam_mb_multi':
-        loss_fn = nn.BCEWithLogitsLoss()
+    if args.task == 'task_survival':
+        loss_fn = NLLLoss()
     elif args.bag_loss == 'svm':
         from topk.svm import SmoothTop1SVM
         loss_fn = SmoothTop1SVM(n_classes = args.n_classes)
@@ -139,7 +146,7 @@ def train(datasets, cur, args):
     if args.model_size is not None and args.model_type != 'mil':
         model_dict.update({"size_arg": args.model_size})
     
-    if args.model_type in ['clam_sb', 'clam_mb']:
+    if args.model_type in ['clam_sb', 'clam_mb', 'clam_survival']:
         if args.subtyping:
             model_dict.update({'subtyping': True})
         
@@ -160,6 +167,8 @@ def train(datasets, cur, args):
             model = CLAM_SB(**model_dict, instance_loss_fn=instance_loss_fn)
         elif args.model_type == 'clam_mb':
             model = CLAM_MB(**model_dict, instance_loss_fn=instance_loss_fn)
+        elif args.model_type == 'clam_survival':
+            model = CLAM_Survival(**model_dict)
         else:
             raise NotImplementedError
     
@@ -178,9 +187,10 @@ def train(datasets, cur, args):
     print('Done!')
     
     print('\nInit Loaders...', end=' ')
-    train_loader = get_split_loader(train_split, training=True, testing = args.testing, weighted = args.weighted_sample)
-    val_loader = get_split_loader(val_split,  testing = args.testing)
-    test_loader = get_split_loader(test_split, testing = args.testing)
+    is_survival = args.task == 'task_survival'
+    train_loader = get_split_loader(train_split, training=True, testing = args.testing, weighted = args.weighted_sample, survival=is_survival)
+    val_loader = get_split_loader(val_split,  testing = args.testing, survival=is_survival)
+    test_loader = get_split_loader(test_split, testing = args.testing, survival=is_survival)
     print('Done!')
 
     print('\nSetup EarlyStopping...', end=' ')
@@ -208,6 +218,10 @@ def train(datasets, cur, args):
             train_loop_clam(epoch, model, train_loader, optimizer, args.n_classes, args.bag_weight, writer, loss_fn)
             stop = validate_clam(cur, epoch, model, val_loader, args.n_classes, 
                 early_stopping, writer, loss_fn, args.results_dir)
+        elif args.model_type == 'clam_survival':
+            train_loop_survival(epoch, model, train_loader, optimizer, writer, loss_fn, args.batch_size)
+            stop = validate_survival(cur, epoch, model, val_loader,
+                early_stopping, writer, loss_fn, args.results_dir)
         else:
             train_loop(epoch, model, train_loader, optimizer, args.n_classes, writer, loss_fn)
             stop = validate(cur, epoch, model, val_loader, args.n_classes, 
@@ -224,27 +238,51 @@ def train(datasets, cur, args):
         model.load_state_dict(torch.load(os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur))))
     else:
         torch.save(model.state_dict(), os.path.join(args.results_dir, "s_{}_checkpoint.pt".format(cur)))
+    
+    if args.task == 'task_survival':
+         # For validation
+        _, val_cindex = summary_survival(model, val_loader)
+        print('Val C-index: {:.4f}'.format(val_cindex))
 
-    _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
-    print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
-
-    results_dict, test_error, test_auc, acc_logger = summary(model, test_loader, args.n_classes)
-    print('Test error: {:.4f}, ROC AUC: {:.4f}'.format(test_error, test_auc))
-
-    for i in range(args.n_classes):
-        acc, correct, count = acc_logger.get_summary(i)
-        print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
-
+        # For testing
+        results_dict, test_cindex = summary_survival(model, test_loader)
+        print('Test C-index: {:.4f}'.format(test_cindex))
+        # 記錄到tensorboard
         if writer:
-            writer.add_scalar('final/test_class_{}_acc'.format(i), acc, 0)
+            writer.add_scalar('final/val_c_index', val_cindex, 0)
+            writer.add_scalar('final/test_c_index', test_cindex, 0)
+            
+            # 如果需要記錄其他統計資訊，可以在這裡添加
+            # 例如：記錄中位生存時間、事件比例等
+            event_ratio = np.mean([v['event'] for v in results_dict.values()])
+            median_time = np.median([v['survival_time'] for v in results_dict.values()])
+            
+            writer.add_scalar('final/event_ratio', event_ratio, 0)
+            writer.add_scalar('final/median_survival_time', median_time, 0)
+            
+            writer.close()
+        return results_dict, test_cindex, val_cindex, 0, 0
 
-    if writer:
-        writer.add_scalar('final/val_error', val_error, 0)
-        writer.add_scalar('final/val_auc', val_auc, 0)
-        writer.add_scalar('final/test_error', test_error, 0)
-        writer.add_scalar('final/test_auc', test_auc, 0)
-        writer.close()
-    return results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
+    else:
+        _, val_error, val_auc, _= summary(model, val_loader, args.n_classes)
+        print('Val error: {:.4f}, ROC AUC: {:.4f}'.format(val_error, val_auc))
+
+        results_dict, test_error, test_auc, acc_logger = summary(model, test_loader, args.n_classes)
+        print('Test error: {:.4f}, ROC AUC: {:.4f}'.format(test_error, test_auc))
+
+        for i in range(args.n_classes):
+            acc, correct, count = acc_logger.get_summary(i)
+            print('class {}: acc {}, correct {}/{}'.format(i, acc, correct, count))
+
+            if writer:
+                writer.add_scalar('final/test_class_{}_acc'.format(i), acc, 0)
+        if writer:
+            writer.add_scalar('final/val_error', val_error, 0)
+            writer.add_scalar('final/val_auc', val_auc, 0)
+            writer.add_scalar('final/test_error', test_error, 0)
+            writer.add_scalar('final/test_auc', test_auc, 0)
+            writer.close()
+        return results_dict, test_auc, val_auc, 1-test_error, 1-val_error 
 
 
 def train_loop_clam(epoch, model, loader, optimizer, n_classes, bag_weight, writer = None, loss_fn = None):
@@ -556,3 +594,140 @@ def summary(model, loader, n_classes):
         auc = np.nanmean(np.array(aucs))
 
     return patient_results, test_error, auc, acc_logger
+
+
+def train_loop_survival(epoch, model, loader, optimizer, writer=None, loss_fn=None, batch_size=16):
+    model.train()
+    train_loss = 0.0
+
+    all_risk_scores = []
+    all_survival_times = []
+    all_events = []
+    
+    for batch_idx, (data, survival_time, event) in enumerate(loader):
+        data = data.to(device)
+        survival_time = survival_time.to(device)
+        event = event.to(device)
+        risk_pred = model(data)
+
+        all_risk_scores.append(risk_pred)
+        all_survival_times.append(survival_time)
+        all_events.append(event)
+
+        # 当 batch 达到指定大小时，计算损失并反向传播
+        if (batch_idx + 1) % batch_size == 0 or (batch_idx + 1) == len(loader):
+             # 将所有数据拼接
+            batch_risk_scores = torch.cat(all_risk_scores, dim=0)  # [batch_size]
+            batch_survival_times = torch.cat(all_survival_times, dim=0)  # [batch_size]
+            batch_events = torch.cat(all_events, dim=0)  # [batch_size]
+
+            # 计算损失
+            loss = loss_fn(batch_risk_scores, batch_survival_times, batch_events)
+
+            train_loss += loss.item()
+
+            # 反向传播与优化
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            # 清空缓存
+            all_risk_scores = []
+            all_survival_times = []
+            all_events = []
+
+            print('Processed {} WSI, current loss: {:.10f}'.format(batch_idx + 1, loss.item()))
+
+        total_batches = (len(loader) + batch_size - 1) // batch_size  # 向上取整
+        train_loss /= total_batches
+    
+    if writer:
+        writer.add_scalar('train/loss', train_loss, epoch)
+    
+    print('Epoch: {}, train_loss: {:.10f}'.format(epoch, train_loss))
+
+def validate_survival(cur, epoch, model, loader, early_stopping=None, writer=None, loss_fn=None, results_dir=None):
+    model.eval()
+    val_loss = 0.
+    all_risk_scores = []
+    all_survival_times = []
+    all_events = []
+    
+    with torch.no_grad():
+        for batch_idx, (data, survival_time, event) in enumerate(loader):
+            data = data.to(device)
+            survival_time = survival_time.to(device)
+            event = event.to(device)
+            
+            risk_pred = model(data)
+            loss = loss_fn(risk_pred, survival_time, event)
+            
+            val_loss += loss.item()
+            
+            all_risk_scores.append(risk_pred.cpu().numpy())
+            all_survival_times.append(survival_time.cpu().numpy())
+            all_events.append(event.cpu().numpy())
+    
+    val_loss /= len(loader)
+    
+    # Calculate C-index
+    all_risk_scores = np.concatenate(all_risk_scores)
+    all_survival_times = np.concatenate(all_survival_times)
+    all_events = np.concatenate(all_events)
+    
+    c_index = concordance_index(all_survival_times, 
+                              -all_risk_scores, 
+                              all_events)
+    
+    if writer:
+        writer.add_scalar('val/loss', val_loss, epoch)
+        writer.add_scalar('val/c_index', c_index, epoch)
+    
+    print('\nVal Set, val_loss: {:.10f}, c-index: {:.4f}'.format(val_loss, c_index))
+    
+    if early_stopping:
+        assert results_dir
+        early_stopping(epoch, val_loss, model, ckpt_name=os.path.join(results_dir, "s_{}_checkpoint.pt".format(cur)))
+        
+        if early_stopping.early_stop:
+            print("Early stopping")
+            return True
+    
+    return False
+
+def summary_survival(model, loader):
+    model.eval()
+    all_risk_scores = []
+    all_survival_times = []
+    all_events = []
+    slide_ids = loader.dataset.slide_data['slide_id']
+    patient_results = {}
+    
+    with torch.no_grad():
+        for batch_idx, (data, survival_time, event) in enumerate(loader):
+            data = data.to(device)
+            risk_pred = model(data)
+            
+            slide_id = slide_ids.iloc[batch_idx]
+            patient_results.update({
+                slide_id: {
+                    'slide_id': np.array(slide_id),
+                    'risk_score': risk_pred.cpu().numpy(),
+                    'survival_time': survival_time.numpy(),
+                    'event': event.numpy()
+                }
+            })
+            
+            all_risk_scores.append(risk_pred.cpu().numpy())
+            all_survival_times.append(survival_time.numpy())
+            all_events.append(event.numpy())
+    
+    all_risk_scores = np.concatenate(all_risk_scores)
+    all_survival_times = np.concatenate(all_survival_times)
+    all_events = np.concatenate(all_events)
+    
+    c_index = concordance_index(all_survival_times, 
+                              -all_risk_scores, 
+                              all_events)
+    
+    return patient_results, c_index

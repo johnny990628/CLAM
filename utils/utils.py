@@ -42,33 +42,47 @@ def collate_features(batch):
 	coords = np.vstack([item[1] for item in batch])
 	return [img, coords]
 
+def collate_MIL_survival(batch):
+	"""Collate function for survival data"""
+	img = torch.cat([item[0] for item in batch], dim=0)
+	survival_time = torch.FloatTensor([item[1] for item in batch])
+	event = torch.FloatTensor([item[2] for item in batch])
+	return [img, survival_time, event]
+
 
 def get_simple_loader(dataset, batch_size=1, num_workers=1):
 	kwargs = {'num_workers': 4, 'pin_memory': False, 'num_workers': num_workers} if device.type == "cuda" else {}
 	loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_MIL, **kwargs)
 	return loader 
 
-def get_split_loader(split_dataset, training = False, testing = False, weighted = False):
-    """
-        return either the validation loader or training loader 
-    """
-    
-    kwargs = {'num_workers': 4} if device.type == "cuda" else {}
-    if not testing:
-        if training:
-            if weighted:
-                weights = make_weights_for_balanced_classes_split(split_dataset)
-                loader = DataLoader(split_dataset, batch_size=1, sampler=WeightedRandomSampler(weights, len(weights)), collate_fn=collate_MIL, **kwargs)
-            else:
-                loader = DataLoader(split_dataset, batch_size=1, sampler=RandomSampler(split_dataset), collate_fn=collate_MIL, **kwargs)
-        else:
-            loader = DataLoader(split_dataset, batch_size=1, sampler=SequentialSampler(split_dataset), collate_fn=collate_MIL, **kwargs)
+def get_split_loader(split_dataset, training = False, testing = False, weighted = False, survival=False):
+	"""
+		return either the validation loader or training loader 
+	"""
+	
+	kwargs = {'num_workers': 4} if device.type == "cuda" else {}
+	if survival:
+		collate_fn = collate_MIL_survival
+		if weighted:
+			print("Warning: Weighted sampling is not implemented for survival data")
+			weighted = False
+	else:
+		collate_fn = collate_MIL
+	if not testing:
+		if training:
+			if weighted and not survival:
+				weights = make_weights_for_balanced_classes_split(split_dataset)
+				loader = DataLoader(split_dataset, batch_size=1, sampler=WeightedRandomSampler(weights, len(weights)), collate_fn=collate_fn, **kwargs)
+			else:
+				loader = DataLoader(split_dataset, batch_size=1, sampler=RandomSampler(split_dataset), collate_fn=collate_fn, **kwargs)
+		else:
+			loader = DataLoader(split_dataset, batch_size=1, sampler=SequentialSampler(split_dataset), collate_fn=collate_fn, **kwargs)
 
-    else:
-        ids = np.random.choice(np.arange(len(split_dataset)), int(len(split_dataset)*0.1), replace=False)
-        loader = DataLoader(split_dataset, batch_size=1, sampler=SubsetSequentialSampler(ids), collate_fn=collate_MIL, **kwargs)
+	else:
+		ids = np.random.choice(np.arange(len(split_dataset)), int(len(split_dataset)*0.1), replace=False)
+		loader = DataLoader(split_dataset, batch_size=1, sampler=SubsetSequentialSampler(ids), collate_fn=collate_fn, **kwargs)
 
-    return loader
+	return loader
 
 
 def get_optim(model, args):
@@ -146,18 +160,18 @@ def calculate_error(Y_hat, Y):
 	return error
 
 def make_weights_for_balanced_classes_split(dataset):
-    N = float(len(dataset))                                           
-    weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
-    weight = [0] * int(N)                                           
-    for idx in range(len(dataset)):   
-    	y = dataset.getlabel(idx)                        
-    	weight[idx] = weight_per_class[y]                                  
+	N = float(len(dataset))                                           
+	weight_per_class = [N/len(dataset.slide_cls_ids[c]) for c in range(len(dataset.slide_cls_ids))]                                                                                                     
+	weight = [0] * int(N)                                           
+	for idx in range(len(dataset)):   
+		y = dataset.getlabel(idx)                        
+		weight[idx] = weight_per_class[y]                                  
 
-    return torch.DoubleTensor(weight)
-    # N = float(len(dataset))
-    # weight_per_class = {c: N/len(dataset.slide_cls_ids[c]) for c in dataset.slide_cls_ids}
-    # weight_per_sample = [sum([weight_per_class[c] for c in dataset.slide_cls_ids if sample_id in dataset.slide_cls_ids[c]]) for sample_id in range(int(N))]
-    # return weight_per_sample
+	return torch.DoubleTensor(weight)
+	# N = float(len(dataset))
+	# weight_per_class = {c: N/len(dataset.slide_cls_ids[c]) for c in dataset.slide_cls_ids}
+	# weight_per_sample = [sum([weight_per_class[c] for c in dataset.slide_cls_ids if sample_id in dataset.slide_cls_ids[c]]) for sample_id in range(int(N))]
+	# return weight_per_sample
 
 def initialize_weights(module):
 	for m in module.modules():
