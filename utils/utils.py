@@ -50,9 +50,10 @@ def collate_MIL_survival(batch):
 	return [img, survival_time, event]
 
 
-def get_simple_loader(dataset, batch_size=1, num_workers=1):
+def get_simple_loader(dataset, args, batch_size=1, num_workers=1):
 	kwargs = {'num_workers': 4, 'pin_memory': False, 'num_workers': num_workers} if device.type == "cuda" else {}
-	loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_MIL, **kwargs)
+	collate_fn = collate_MIL_survival if args.task == 'task_survival' else collate_MIL_survival
+	loader = DataLoader(dataset, batch_size=batch_size, sampler = sampler.SequentialSampler(dataset), collate_fn = collate_fn, **kwargs)
 	return loader 
 
 def get_split_loader(split_dataset, training = False, testing = False, weighted = False, survival=False):

@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from models.model_mil import MIL_fc, MIL_fc_mc
-from models.model_clam import CLAM_SB, CLAM_MB
+from models.model_clam import CLAM_SB, CLAM_MB, CLAM_Survival
 import pdb
 import os
 import pandas as pd
@@ -13,18 +13,23 @@ from utils.core_utils import Accuracy_Logger
 from sklearn.metrics import roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 import matplotlib.pyplot as plt
+from lifelines.utils import concordance_index
 
 def initiate_model(args, ckpt_path, device='cuda'):
     print('Init Model')    
-    model_dict = {"dropout": args.drop_out, 'n_classes': args.n_classes, "embed_dim": args.embed_dim}
+    model_dict = {"dropout": args.drop_out, "n_classes": args.n_classes, "embed_dim": args.embed_dim}
     
-    if args.model_size is not None and args.model_type in ['clam_sb', 'clam_mb']:
+    if args.model_size is not None and args.model_type in ['clam_sb', 'clam_mb', 'clam_survival']:
         model_dict.update({"size_arg": args.model_size})
-    
+    if args.task == 'task_survival':
+        model_dict.update({"n_classes": 1})
+
     if args.model_type =='clam_sb':
         model = CLAM_SB(**model_dict)
     elif args.model_type =='clam_mb':
         model = CLAM_MB(**model_dict)
+    elif args.model_type == 'clam_survival':
+        model = CLAM_Survival(**model_dict)
     else: # args.model_type == 'mil'
         if args.n_classes > 2:
             model = MIL_fc_mc(**model_dict)
@@ -49,11 +54,16 @@ def eval(dataset, args, ckpt_path):
     model = initiate_model(args, ckpt_path)
     
     print('Init Loaders')
-    loader = get_simple_loader(dataset)
-    patient_results, test_error, auc, df, _ = summary(model, loader, args)
-    print('test_error: ', test_error)
-    print('auc: ', auc)
-    return model, patient_results, test_error, auc, df
+    loader = get_simple_loader(dataset, args)
+    if args.task == 'task_survival':
+        patient_results, test_error, cindex, df, _ = survival_summary(model, loader, args)
+        print('C Index: ', cindex)
+        return model, patient_results, test_error, cindex, df
+    else:
+        patient_results, test_error, auc, df, _ = summary(model, loader, args)
+        print('test_error: ', test_error)
+        print('auc: ', auc)
+        return model, patient_results, test_error, auc, df
 
 def summary(model, loader, args):
     acc_logger = Accuracy_Logger(n_classes=args.n_classes)
@@ -116,3 +126,55 @@ def summary(model, loader, args):
         results_dict.update({'p_{}'.format(c): all_probs[:,c]})
     df = pd.DataFrame(results_dict)
     return patient_results, test_error, auc_score, df, acc_logger
+
+def survival_summary(model, loader, args):
+    model.eval()
+    all_risk_scores = []
+    all_survival_times = []
+    all_events = []
+    all_slide_ids = []
+
+    patient_results = {}
+    
+    for batch_idx, (data, survival_time, event) in enumerate(loader):
+        data = data.to(device)
+        survival_time = survival_time.to(device)
+        event = event.to(device)
+        slide_id = loader.dataset.slide_data['slide_id'].iloc[batch_idx]
+
+        with torch.no_grad():
+            risk_pred = model(data)
+        
+        all_risk_scores.append(risk_pred.cpu().numpy().item())  # Convert to scalar
+        all_survival_times.append(survival_time.cpu().numpy().item())  # Convert to scalar
+        all_events.append(event.cpu().numpy().item())  # Convert to scalar
+        all_slide_ids.append(slide_id)
+        
+        patient_results.update({slide_id: {'slide_id': slide_id, 
+                                           'risk_score': risk_pred.item(), 
+                                           'survival_time': survival_time.item(), 
+                                           'event': event.item()}})
+
+    all_risk_scores = np.array(all_risk_scores)
+    all_survival_times = np.array(all_survival_times)
+    all_events = np.array(all_events)
+    
+    c_index = concordance_index(all_survival_times, 
+                                -all_risk_scores, 
+                                all_events)
+    
+    print('\nTest Set, c-index: {:.4f}'.format(c_index))
+    
+    results_dict = {'slide_id': all_slide_ids, 
+                    'Y': all_events,  # event is treated as label
+                    'Y_hat': all_risk_scores,  # risk score is treated as prediction
+                    'survival_time': all_survival_times,
+                    'event': all_events}
+    
+    # Ensure all arrays are 1-dimensional
+    for key in results_dict:
+        if isinstance(results_dict[key], np.ndarray):
+            results_dict[key] = results_dict[key].flatten()
+    
+    df = pd.DataFrame(results_dict)
+    return patient_results, 0.0, c_index, df, None  # 0.0 is a placeholder for test_error

@@ -13,9 +13,10 @@ from math import floor
 import matplotlib.pyplot as plt
 from sklearn.metrics import confusion_matrix, roc_curve
 import seaborn as sns
-from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits
+from dataset_modules.dataset_generic import Generic_WSI_Classification_Dataset, Generic_MIL_Dataset, save_splits, Generic_MIL_Survival_Dataset
 import h5py
 from utils.eval_utils import *
+from lifelines import KaplanMeierFitter
 
 # Training settings
 parser = argparse.ArgumentParser(description='CLAM Evaluation Script')
@@ -32,7 +33,7 @@ parser.add_argument('--splits_dir', type=str, default=None,
                     help='splits directory, if using custom splits other than what matches the task (default: None)')
 parser.add_argument('--model_size', type=str, choices=['small', 'big'], default='small', 
                     help='size of model (default: small)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil', 'clam_mb_multi'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'mil', 'clam_survival'], default='clam_sb', 
                     help='type of model (default: clam_sb)')
 parser.add_argument('--k', type=int, default=10, help='number of folds (default: 10)')
 parser.add_argument('--k_start', type=int, default=-1, help='start fold (default: -1, last fold)')
@@ -41,7 +42,7 @@ parser.add_argument('--fold', type=int, default=-1, help='single fold to evaluat
 parser.add_argument('--micro_average', action='store_true', default=False, 
                     help='use micro_average instead of macro_avearge for multiclass AUC')
 parser.add_argument('--split', type=str, choices=['train', 'val', 'test', 'all'], default='test')
-parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_4genes_mutation'])
+parser.add_argument('--task', type=str, choices=['task_1_tumor_vs_normal',  'task_2_tumor_subtyping', 'task_tp53_mutation', 'task_survival'])
 parser.add_argument('--drop_out', type=float, default=0.25, help='dropout')
 parser.add_argument('--embed_dim', type=int, default=512)
 parser.add_argument('--multi_scale', action='store_true', default=False)
@@ -106,18 +107,15 @@ elif args.task == 'task_tp53_mutation':
                             patient_strat=False,
                             ignore=[])
 
-elif args.task == 'task_4genes_mutation':
-    args.n_classes=4
-    label_dict = {'TP53': 0, 'EGFR': 1, 'KRAS': 2, 'STK11': 3}
-    dataset = Generic_MIL_MultiLabel_Dataset(
-                                        csv_path='dataset_csv/4genes_mutation.csv',
-                                        data_dir=os.path.join(args.data_root_dir),
-                                        shuffle = False, 
-                                        print_info = True,
-                                        label_dict=label_dict,
-                                        patient_strat=False,
-                                        label_cols=['TP53', 'EGFR', 'KRAS', 'STK11'])
-
+elif args.task == 'task_survival':
+    args.n_classes = 1  # 生存分析輸出為一個連續值
+    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_335.csv',
+                        data_dir= os.path.join(args.data_root_dir),
+                        shuffle = False, 
+                        print_info = True,
+                        time_col = 'time',
+                        event_col = 'event',
+                        patient_strat=True)
 
 else:
     raise NotImplementedError
@@ -174,10 +172,28 @@ def gen_cm_matrics(df, auc, save_dir):
     plt.close()
     return auc, sensitivity, specificity, f1_score, threshold
 
+def gen_km_curve(df, save_dir):
+    kmf = KaplanMeierFitter()
+    median_risk = df['Y_hat'].median()
+    groups = df['Y_hat'].map(lambda x: 'High Risk' if x >= median_risk else 'Low Risk')
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    for group in ['Low Risk', 'High Risk']:
+        mask = groups == group
+        kmf.fit(df['survival_time'][mask], df['event'][mask], label=group)
+        kmf.plot(ax=ax)
+    
+    plt.title('Kaplan-Meier Curve')
+    plt.xlabel('Time')
+    plt.ylabel('Survival Probability')
+    plt.savefig(os.path.join(save_dir, 'km_curve.png'))
+    plt.close()
+
 if __name__ == "__main__":
     all_results = []
     all_auc = []
     all_acc = []
+    all_cindex = []
     for ckpt_idx in range(len(ckpt_paths)):
         if datasets_id[args.split] < 0:
             split_dataset = dataset
@@ -185,19 +201,27 @@ if __name__ == "__main__":
             csv_path = '{}/splits_{}.csv'.format(args.splits_dir, folds[ckpt_idx])
             datasets = dataset.return_splits(from_id=False, csv_path=csv_path)
             split_dataset = datasets[datasets_id[args.split]]
-        model, patient_results, test_error, auc, df  = eval(split_dataset, args, ckpt_paths[ckpt_idx])
-        all_results.append(all_results)
-        all_auc.append(auc)
-        all_acc.append(1-test_error)
-        df.to_csv(os.path.join(args.save_dir, 'fold_{}.csv'.format(folds[ckpt_idx])), index=False)
-        auc, sensitivity, specificity, f1_score, threshold = gen_cm_matrics(df, auc, args.save_dir)
-        metrics_df = pd.DataFrame({'AUC': auc, 'Sensitivity': sensitivity, 'Specificity': specificity, 
-        'F1 Score': f1_score, 'Youden Threshold': threshold}, index=[0])
-        metrics_df.to_csv(os.path.join(args.save_dir,'metrics.csv'))
-
-    final_df = pd.DataFrame({'folds': folds, 'test_auc': all_auc, 'test_acc': all_acc})
-    if len(folds) != args.k:
-        save_name = 'summary_partial_{}_{}.csv'.format(folds[0], folds[-1])
-    else:
-        save_name = 'summary.csv'
-    final_df.to_csv(os.path.join(args.save_dir, save_name))
+        if args.task == 'task_survival':
+            model, patient_results, test_error, cindex, df  = eval(split_dataset, args, ckpt_paths[ckpt_idx])
+            all_results.append(all_results)
+            all_cindex.append(cindex)
+            df.to_csv(os.path.join(args.save_dir, 'fold_{}.csv'.format(folds[ckpt_idx])), index=False)
+            gen_km_curve(df, args.save_dir)
+            metrics_df = pd.DataFrame({'C Index': cindex}, index=[0])
+            metrics_df.to_csv(os.path.join(args.save_dir,'metrics.csv'))
+        else:
+            model, patient_results, test_error, auc, df  = eval(split_dataset, args, ckpt_paths[ckpt_idx])
+            all_results.append(all_results)
+            all_auc.append(auc)
+            all_acc.append(1-test_error)
+            df.to_csv(os.path.join(args.save_dir, 'fold_{}.csv'.format(folds[ckpt_idx])), index=False)
+            auc, sensitivity, specificity, f1_score, threshold = gen_cm_matrics(df, auc, args.save_dir)
+            metrics_df = pd.DataFrame({'AUC': auc, 'Sensitivity': sensitivity, 'Specificity': specificity, 
+            'F1 Score': f1_score, 'Youden Threshold': threshold}, index=[0])
+            metrics_df.to_csv(os.path.join(args.save_dir,'metrics.csv'))
+            final_df = pd.DataFrame({'folds': folds, 'test_auc': all_auc, 'test_acc': all_acc})
+            if len(folds) != args.k:
+                save_name = 'summary_partial_{}_{}.csv'.format(folds[0], folds[-1])
+            else:
+                save_name = 'summary.csv'
+            final_df.to_csv(os.path.join(args.save_dir, save_name))

@@ -253,7 +253,7 @@ class CLAM_MB(CLAM_SB):
     
 
 class CLAM_Survival(nn.Module):
-    def __init__(self, gate=True, size_arg="large", dropout=True, embed_dim=512, **kwargs):
+    def __init__(self, gate=True, size_arg="small", dropout=True, embed_dim=512, **kwargs):
         super(CLAM_Survival, self).__init__()
         self.size_dict = {'xs': [embed_dim, 256, 256], "small": [embed_dim, 512, 256], "big": [embed_dim, 512, 384], 'large': [embed_dim, 1024, 512]}
         size = self.size_dict[size_arg]

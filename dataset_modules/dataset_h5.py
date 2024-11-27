@@ -100,73 +100,109 @@ class Dataset_All_Bags(Dataset):
 		return self.df['slide_id'][idx]
 
 class Multi_Scale_Bag(Dataset):
-    def __init__(self, file_path, wsi, low_mag, high_mag, img_transforms=None):
-        """
-        Args:
-            file_path (string): Path to the .h5 file containing patched data.
-            wsi (OpenSlide): Whole slide image object.
-            low_magnification (float): Low magnification level.
-            high_magnification (float): High magnification level.
-            img_transforms (callable, optional): Optional transform to be applied on images.
-        """
-        self.wsi = wsi
-        self.roi_transforms = img_transforms
-        self.file_path = file_path
-        self.low_mag = low_mag
-        self.high_mag = high_mag
-        self.level_factor = int(high_mag / low_mag)
+	def __init__(self, file_path, wsi, low_mag, high_mag, img_transforms=None):
+		"""
+		Args:
+			file_path (string): Path to the .h5 file containing patched data.
+			wsi (OpenSlide): Whole slide image object.
+			low_magnification (float): Low magnification level.
+			high_magnification (float): High magnification level.
+			img_transforms (callable, optional): Optional transform to be applied on images.
+		"""
+		self.wsi = wsi
+		self.roi_transforms = img_transforms
+		self.file_path = file_path
+		self.low_mag = low_mag
+		self.high_mag = high_mag
 
-        with h5py.File(self.file_path, "r") as f:
-            self.coords = f['coords'][:]
-            self.patch_level = f['coords'].attrs['patch_level']
-            self.patch_size = f['coords'].attrs['patch_size']
-            self.length = len(self.coords)
+		with h5py.File(self.file_path, "r") as f:
+			self.coords = f['coords'][:]
+			self.patch_level = f['coords'].attrs['patch_level']
+			self.patch_size = f['coords'].attrs['patch_size']
+			self.scale_factor = f['coords'].attrs.get('scale_factor',1.0)
+			self.length = len(self.coords)
 
-        self.summary()
+		self.summary()
 
-    def __len__(self):
-        return self.length
+	def __len__(self):
+		return self.length
 
-    def summary(self):
-        print('\nMultiResolutionDataset summary:')
-        print(f'file_path: {self.file_path}')
-        print(f'patch_level: {self.patch_level}')
-        print(f'patch_size: {self.patch_size}')
-        print(f'total patches: {self.length}')
-        print(f'low magnification: {self.low_mag}')
-        print(f'high magnification: {self.high_mag}')
-        print(f'level factor: {self.level_factor}')
-        print(f'transformations: {self.roi_transforms}')
+	def summary(self):
+		print('\nMultiResolutionDataset summary:')
+		print(f'file_path: {self.file_path}')
+		print(f'patch_level: {self.patch_level}')
+		print(f'patch_size: {self.patch_size}')
+		print(f'total patches: {self.length}')
+		print(f'low magnification: {self.low_mag}')
+		print(f'high magnification: {self.high_mag}')
+		print(f'scale factor: {self.scale_factor}')
+		print(f'transformations: {self.roi_transforms}')
 
-    def __getitem__(self, idx):
-        coord = self.coords[idx]
-        x, y = coord
+	def __getitem__(self, idx):
+		coord = self.coords[idx]
+		x, y = coord
 
-        # 低倍率图像
-        low_img = self.wsi.read_region(
-            (x, y), 
-            self.patch_level, 
-            (self.patch_size, self.patch_size)
-        ).convert('RGB')
-        
-        # 高倍率图像
-        high_imgs = []
-        for i in range(self.level_factor):
-            for j in range(self.level_factor):
-                high_x = x * self.level_factor + i * self.patch_size
-                high_y = y * self.level_factor + j * self.patch_size
-                high_img = self.wsi.read_region(
-                    (high_x, high_y), 
-                    self.wsi.get_best_level_for_downsample(self.high_mag), 
-                    (self.patch_size, self.patch_size)
-                ).convert('RGB')
-                if self.roi_transforms:
-                    high_img = self.roi_transforms(high_img)
-                high_imgs.append(high_img)
 
-        if self.roi_transforms:
-            low_img = self.roi_transforms(low_img)
+		low_patch_size = int(float(self.patch_size)/float(self.scale_factor))
+		# 低倍率图像
+		low_img = self.wsi.read_region(
+			(x, y), 
+			self.patch_level, 
+			(low_patch_size, low_patch_size)
+		).convert('RGB')
+		high_scale_factor, high_level = self.calculate_scale_factor(self.high_mag)
 
-        return {'low': low_img, 'high': high_imgs, 'coord': coord}
+		high_patch_size = int(float(low_patch_size)/high_scale_factor*self.scale_factor)
+			
+
+		rows = int(self.high_mag/self.low_mag)
+		cols = rows
+		
+		# 高倍率图像
+		high_imgs = []
+		for row in range(rows):
+			for col in range(cols):
+				high_x = int(x + col * high_patch_size)
+				high_y = int(y + row * high_patch_size)
+				high_img = self.wsi.read_region(
+					(high_x, high_y), 
+					high_level, 
+					(high_patch_size, high_patch_size)
+				).convert('RGB')
+				if self.roi_transforms:
+					high_img = self.roi_transforms(high_img)
+				high_imgs.append(high_img)
+
+		if self.roi_transforms:
+			low_img = self.roi_transforms(low_img)
+
+		return {'low': low_img, 'high': high_imgs, 'coord': coord}
+	
+	def get_nearest_magnification(self, mag):
+		common_magnifications = [0.5, 1, 1.25, 2.5, 5, 10, 20, 40]
+		# 找到與 mag 最接近的倍率
+		nearest_mag = min(common_magnifications, key=lambda x: abs(x - mag))
+		return nearest_mag
+	
+	def calculate_scale_factor(self, target_magnification):
+		objective_power = float(self.wsi.properties.get('openslide.objective-power'))
+		target_magnification = float(target_magnification)
+
+		available_magnifications = []
+		available_downsamples = self.wsi.level_downsamples
+		best_level = 0
+		for i, downsample in enumerate(available_downsamples):
+			mag = float(self.get_nearest_magnification(objective_power / downsample))
+			available_magnifications.append(mag)
+			if mag >= target_magnification:
+				best_level = i
+			print(f"Level {i}: Magnification = {mag:.2f}x, Downsample = {downsample:.2f}")
+
+		scale_factor = float(target_magnification) / float(available_magnifications[best_level])
+		print(f"Target Magnification: {target_magnification}")
+		print(f"Best Level: {best_level}")
+		print(f"Scale Factor: {scale_factor}")
+		
+		return scale_factor, best_level
 
 

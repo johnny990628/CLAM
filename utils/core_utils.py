@@ -205,10 +205,11 @@ def train(datasets, cur, args):
     if args.lr_scheduler:
         max_epochs = 50
         warmup_scheduler = LinearLR(optimizer, start_factor=0.1, total_iters=args.warmup_epochs)
-        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs - args.warmup_epochs)
-        scheduler = SequentialLR(optimizer, 
-                                schedulers=[warmup_scheduler, cosine_scheduler],
-                                milestones=[args.warmup_epochs])
+        cosine_scheduler = CosineAnnealingLR(optimizer, T_max=max_epochs, eta_min=args.lr*0.1)
+        scheduler = cosine_scheduler
+        # scheduler = SequentialLR(optimizer, 
+        #                         schedulers=[warmup_scheduler, cosine_scheduler],
+        #                         milestones=[args.warmup_epochs])
     else:
         scheduler = None
     print('Done!')
@@ -614,36 +615,26 @@ def train_loop_survival(epoch, model, loader, optimizer, writer=None, loss_fn=No
         all_survival_times.append(survival_time)
         all_events.append(event)
 
-        # 当 batch 达到指定大小时，计算损失并反向传播
         if (batch_idx + 1) % batch_size == 0 or (batch_idx + 1) == len(loader):
-             # 将所有数据拼接
             batch_risk_scores = torch.cat(all_risk_scores, dim=0)  # [batch_size]
             batch_survival_times = torch.cat(all_survival_times, dim=0)  # [batch_size]
             batch_events = torch.cat(all_events, dim=0)  # [batch_size]
-
-            # 计算损失
             loss = loss_fn(batch_risk_scores, batch_survival_times, batch_events)
 
             train_loss += loss.item()
-
-            # 反向传播与优化
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
-            # 清空缓存
             all_risk_scores = []
             all_survival_times = []
             all_events = []
 
             print('Processed {} WSI, current loss: {:.10f}'.format(batch_idx + 1, loss.item()))
-
-        total_batches = (len(loader) + batch_size - 1) // batch_size  # 向上取整
+        total_batches = (len(loader) + batch_size - 1) // batch_size  
         train_loss /= total_batches
     
     if writer:
-        writer.add_scalar('train/loss', train_loss, epoch)
-    
+        writer.add_scalar('train/loss', train_loss, epoch)  
     print('Epoch: {}, train_loss: {:.10f}'.format(epoch, train_loss))
 
 def validate_survival(cur, epoch, model, loader, early_stopping=None, writer=None, loss_fn=None, results_dir=None):
