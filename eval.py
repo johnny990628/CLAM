@@ -109,7 +109,7 @@ elif args.task == 'task_tp53_mutation':
 
 elif args.task == 'task_survival':
     args.n_classes = 1  # 生存分析輸出為一個連續值
-    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_335.csv',
+    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_486.csv',
                         data_dir= os.path.join(args.data_root_dir),
                         shuffle = False, 
                         print_info = True,

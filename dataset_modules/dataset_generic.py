@@ -664,6 +664,9 @@ class Generic_MIL_Survival_Dataset(Generic_WSI_Survival_Dataset):
 		if not self.use_h5:
 			if self.data_dir:
 				full_path = os.path.join(data_dir, 'pt_files', '{}.pt'.format(slide_id))
+				# h5_path = os.path.join(data_dir, 'h5_files', '{}.h5'.format(slide_id))
+				# with h5py.File(h5_path,'r') as hdf5_file:
+				# 	coords = hdf5_file['coords'][:]
 				features = torch.load(full_path, weights_only=True)
 				return features, torch.FloatTensor([survival_time]), torch.FloatTensor([event])
 			else:

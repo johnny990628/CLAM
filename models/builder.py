@@ -81,7 +81,7 @@ def get_encoder(model_name, target_img_size=224):
         model.load_state_dict(td['model'], strict=True)
     elif model_name == 'gigapath':
         assert "HF_TOKEN" in os.environ, "Please set the HF_TOKEN environment variable to your Hugging Face API token"
-        model = timm.create_model("hf_hub:prov-gigapath/prov-gigapath", pretrained=True)
+        model = timm.create_model("hf_hub:prov-gigapath/prov-gigapath", img_size=target_img_size, pretrained=True)
 
 
     else:

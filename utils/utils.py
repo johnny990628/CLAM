@@ -47,6 +47,7 @@ def collate_MIL_survival(batch):
 	img = torch.cat([item[0] for item in batch], dim=0)
 	survival_time = torch.FloatTensor([item[1] for item in batch])
 	event = torch.FloatTensor([item[2] for item in batch])
+	# coords = torch.cat([torch.tensor(item[3]) for item in batch], dim=0)
 	return [img, survival_time, event]
 
 

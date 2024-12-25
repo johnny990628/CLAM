@@ -8,7 +8,7 @@ import numpy as np
 parser = argparse.ArgumentParser(description='Creating splits for whole slide classification')
 parser.add_argument('--label_frac', type=float, default= 1.0,
                     help='fraction of labels (default: 1)')
-parser.add_argument('--seed', type=int, default=1,
+parser.add_argument('--seed', type=int, default=42,
                     help='random seed (default: 1)')
 parser.add_argument('--k', type=int, default=10,
                     help='number of splits (default: 10)')
@@ -52,7 +52,7 @@ elif args.task == 'task_tp53_mutation_318' or args.task == 'task_tp53_mutation_5
                             patient_strat=True,
                             ignore=[])
 elif args.task == 'task_survival':
-    dataset = Generic_WSI_Survival_Dataset(csv_path='dataset_csv/survival_335.csv',
+    dataset = Generic_WSI_Survival_Dataset(csv_path='dataset_csv/survival_486.csv',
                             shuffle=False,
                             seed=args.seed,
                             print_info=True,

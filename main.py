@@ -20,6 +20,9 @@ import torch.nn.functional as F
 import pandas as pd
 import numpy as np
 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torch")
+
 def main(args):
     # create results directory if necessary
     if not os.path.isdir(args.results_dir):
@@ -95,7 +98,7 @@ parser.add_argument('--label_frac', type=float, default=1.0,
                     help='fraction of training labels (default: 1.0)')
 parser.add_argument('--reg', type=float, default=1e-5,
                     help='weight decay (default: 1e-5)')
-parser.add_argument('--seed', type=int, default=1, 
+parser.add_argument('--seed', type=int, default=42, 
                     help='random seed for reproducible experiment (default: 1)')
 parser.add_argument('--k', type=int, default=10, help='number of folds (default: 10)')
 parser.add_argument('--k_start', type=int, default=-1, help='start fold (default: -1, last fold)')
@@ -111,7 +114,7 @@ parser.add_argument('--opt', type=str, choices = ['adam', 'sgd'], default='adam'
 parser.add_argument('--drop_out', type=float, default=0.25, help='dropout')
 parser.add_argument('--bag_loss', type=str, choices=['svm', 'ce'], default='ce',
                      help='slide-level classification loss function (default: ce)')
-parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'clam_survival', 'mil'], default='clam_sb', 
+parser.add_argument('--model_type', type=str, choices=['clam_sb', 'clam_mb', 'clam_survival', 'gigapath_survival', 'mil'], default='clam_sb', 
                     help='type of model (default: clam_sb, clam w/ single attention branch)')
 parser.add_argument('--exp_code', type=str, help='experiment code for saving results')
 parser.add_argument('--weighted_sample', action='store_true', default=False, help='enable weighted sampling')
@@ -214,7 +217,7 @@ elif args.task == 'task_tp53_mutation':
     
 elif args.task == 'task_survival':
     args.n_classes = 1  # 生存分析輸出為一個連續值
-    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_335.csv',
+    dataset = Generic_MIL_Survival_Dataset(csv_path = 'dataset_csv/survival_486.csv',
                         data_dir= os.path.join(args.data_root_dir),
                         shuffle = False, 
                         seed = args.seed, 

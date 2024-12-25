@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import pdb
+from . import slide_encoder
+
 
 """
 Attention Network without Gating (2 fc layers)
@@ -266,7 +268,12 @@ class CLAM_Survival(nn.Module):
             attention_net = Attn_Net(L=size[1], D=size[2], dropout=dropout, n_classes=1)
         fc.append(attention_net)
         self.attention_net = nn.Sequential(*fc)
-        self.regression = nn.Linear(size[1], 1)
+        self.out_layer = nn.Sequential(
+                    nn.Linear(size[1], size[2]),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(0.25),
+                    nn.Linear(size[2], 1)
+        )
 
     @staticmethod
     def create_positive_targets(length, device):
@@ -289,11 +296,87 @@ class CLAM_Survival(nn.Module):
 
         M = torch.mm(A, h)  # A: 1 * N h: N * 512 => M: 1 * 512
         # M = torch.cat([M, embed_batch], axis=1)
-        risk_score = self.regression(M)  
+        risk_score = self.out_layer(M)  
         # Y_hat = torch.topk(risk_score, 1, dim=1)[1]
         result = {
             'risk_score': risk_score,
             'attention_raw': A_raw,
             'M': M
         }
+        return risk_score
+    
+class GIGAPATH_Survival(nn.Module):
+    """
+    The classification head for the slide encoder
+
+    Arguments:
+    ----------
+    input_dim: int
+        The input dimension of the slide encoder
+    latent_dim: int
+        The latent dimension of the slide encoder
+    feat_layer: str
+        The layers from which embeddings are fed to the classifier, e.g., 5-11 for taking out the 5th and 11th layers
+    n_classes: int
+        The number of classes
+    model_arch: str
+        The architecture of the slide encoder
+    pretrained: str
+        The path to the pretrained slide encoder
+    freeze: bool
+        Whether to freeze the pretrained model
+    """
+
+    def __init__(
+        self,
+        input_dim=1536,
+        latent_dim=768,
+        feat_layer='11',
+        embed_dim=512,
+        model_arch="gigapath_slide_enc12l768d",
+        pretrained="hf_hub:prov-gigapath/prov-gigapath",
+        freeze=True,
+        **kwargs,
+    ):
+        super(GIGAPATH_Survival, self).__init__()
+
+        # setup the slide encoder
+        self.feat_layer = [eval(x) for x in feat_layer.split("-")]
+        self.feat_dim = len(self.feat_layer) * latent_dim
+        self.slide_encoder = slide_encoder.create_model(pretrained, model_arch, in_chans=input_dim, **kwargs)
+
+        # whether to freeze the pretrained model
+        if freeze:
+            print("Freezing Pretrained GigaPath model")
+            for name, param in self.slide_encoder.named_parameters():
+                param.requires_grad = False
+            print("Done")
+        # setup the classifier
+        fc = [nn.Linear(self.feat_dim, embed_dim), nn.ReLU()]
+        # fc.append(nn.Dropout(0.25))
+        self.fc_layer = nn.Sequential(*fc)
+        self.out_layer = nn.Linear(embed_dim, 1)
+
+    def forward(self, images: torch.Tensor, coords: torch.Tensor) -> torch.Tensor:
+        """
+        Arguments:
+        ----------
+        images: torch.Tensor
+            The input images with shape [N, L, D]
+        coords: torch.Tensor
+            The input coordinates with shape [N, L, 2]
+        """
+        # inputs: [N, L, D]
+        if len(images.shape) == 2:
+            images = images.unsqueeze(0)
+        assert len(images.shape) == 3
+        # forward GigaPath slide encoder
+        img_enc = self.slide_encoder.forward(images, coords, all_layer_embed=True)
+        img_enc = [img_enc[i] for i in self.feat_layer]
+        img_enc = torch.cat(img_enc, dim=-1)
+        # classifier
+        h = img_enc.reshape([-1, img_enc.size(-1)])
+        h = self.fc_layer(img_enc)
+        # Apply output layer
+        risk_score = self.out_layer(h)
         return risk_score

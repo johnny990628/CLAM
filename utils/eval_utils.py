@@ -14,6 +14,8 @@ from sklearn.metrics import roc_auc_score, roc_curve, auc
 from sklearn.preprocessing import label_binarize
 import matplotlib.pyplot as plt
 from lifelines.utils import concordance_index
+from sksurv.metrics import concordance_index_censored
+
 
 def initiate_model(args, ckpt_path, device='cuda'):
     print('Init Model')    
@@ -157,12 +159,15 @@ def survival_summary(model, loader, args):
 
     all_risk_scores = np.array(all_risk_scores)
     all_survival_times = np.array(all_survival_times)
-    all_events = np.array(all_events)
+    all_events = np.array(all_events, dtype=bool)
     
-    c_index = concordance_index(all_survival_times, 
-                                -all_risk_scores, 
-                                all_events)
-    
+    c_index = concordance_index_censored(
+        event_indicator=all_events,  
+        event_time=all_survival_times,
+        estimate=all_risk_scores  # No need for negative sign since higher score = higher risk
+    )
+    c_index = c_index[0]
+
     print('\nTest Set, c-index: {:.4f}'.format(c_index))
     
     results_dict = {'slide_id': all_slide_ids, 

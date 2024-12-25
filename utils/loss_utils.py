@@ -5,13 +5,10 @@ import numpy as np
 class NLLLoss(nn.Module):
     def __init__(self):
         super(NLLLoss, self).__init__()
-    def forward(self, risk_scores, events, survival_times):
+    def forward(self, risk_scores, survival_times, events):
         idx = survival_times.sort(descending=True)[1]
         events = events[idx]
         risk_scores = risk_scores[idx]
-        events = events.float()
-        events = events.view(-1)
-        risk_scores = risk_scores.view(-1)
         uncensored_likelihood = risk_scores - risk_scores.exp().cumsum(0).log()
         censored_likelihood = uncensored_likelihood * events
         num_observed_events = events.sum()
@@ -72,3 +69,45 @@ def nll_loss(hazards, S, Y, c, alpha=0.4, eps=1e-7):
     loss = (1-alpha) * neg_l + alpha * uncensored_loss
     loss = loss.mean()
     return loss
+
+class SurvPLE(nn.Module):
+    """A partial likelihood estimation (called Breslow estimation) function in Survival Analysis.
+
+    This is a pytorch implementation by Huang. See more in https://github.com/huangzhii/SALMON.
+    Note that it only suppurts survival data with no ties (i.e., event occurrence at same time).
+    
+    Args:
+        y (Tensor): The absolute value of y indicates the last observed time. The sign of y 
+        represents the censor status. Negative value indicates a censored example.
+        y_hat (Tensor): Predictions given by the survival prediction model.
+    """
+    def __init__(self):
+        super(SurvPLE, self).__init__()
+        print('[setup] loss: a popular PLE loss in coxph')
+
+    def forward(self, risk_scores, survival_times, events):
+        device = risk_scores.device
+
+        T = survival_times  # Observed times
+        E = events  # Event indicators (1 if event, 0 if censored)
+
+        n_batch = len(T)
+        
+        # Build risk set matrix
+        R_matrix_train = torch.zeros([n_batch, n_batch], dtype=torch.int8)
+        for i in range(n_batch):
+            for j in range(n_batch):
+                R_matrix_train[i, j] = T[j] >= T[i]
+
+        train_R = R_matrix_train.float().to(device)
+        train_ystatus = E.to(device)
+
+        # Calculate loss
+        theta = risk_scores  # Risk scores from the model
+        exp_theta = torch.exp(theta)
+
+        # Partial likelihood estimation
+        loss_nn = -torch.mean(
+            (theta - torch.log(torch.sum(exp_theta * train_R, dim=1))) * train_ystatus
+        )
+        return loss_nn
